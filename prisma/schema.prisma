@@ -1,0 +1,79 @@
+generator client {
+  provider     = "prisma-client-js"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model Gym {
+  id                       Int      @id @default(autoincrement())
+  name                     String
+  razorpay_key_id          String
+  razorpay_key_secret      String
+  razorpay_webhook_secret  String
+  whatsapp_phone_number_id String
+  whatsapp_access_token    String   @db.Text
+  google_sheet_id          String
+  owner_phone              String
+  created_at               DateTime @default(now())
+
+  members  Member[]
+  payments Payment[]
+  renewals Renewal[]
+}
+
+model Member {
+  id                    Int       @id @default(autoincrement())
+  gym_id                Int
+  name                  String
+  phone                 String
+  plan_name             String
+  plan_amount           Float
+  join_date             DateTime
+  expiry_date           DateTime
+  status                String    @default("active")
+  last_reminder_sent_at DateTime?
+  created_at            DateTime  @default(now())
+
+  gym      Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  payments Payment[]
+  renewals Renewal[]
+
+  @@unique([gym_id, phone])
+}
+
+model Payment {
+  id                       Int      @id @default(autoincrement())
+  gym_id                   Int
+  member_id                Int
+  razorpay_payment_link_id String
+  amount                   Float
+  status                   String   @default("created")
+  created_at               DateTime @default(now())
+
+  gym    Gym    @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [member_id], references: [id], onDelete: Cascade)
+}
+
+model Renewal {
+  id                       Int      @id @default(autoincrement())
+  gym_id                   Int
+  member_id                Int
+  amount                   Float
+  status                   String   @default("pending")
+  razorpay_payment_link_id String?
+  razorpay_short_url       String?
+  whatsapp_message_id      String?
+  whatsapp_sent_at         DateTime?
+  whatsapp_status          String?
+  created_at               DateTime @default(now())
+  updated_at               DateTime @updatedAt
+
+  gym    Gym    @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  member Member @relation(fields: [member_id], references: [id], onDelete: Cascade)
+
+  @@index([gym_id])
+  @@index([member_id])
+}
