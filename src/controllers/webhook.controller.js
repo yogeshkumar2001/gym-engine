@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 const { settleRenewal } = require('../services/renewalService');
+const { decryptGymCredentials } = require('../utils/encryption');
 
 async function handleRazorpayWebhook(req, res, next) {
   try {
@@ -22,6 +23,8 @@ async function handleRazorpayWebhook(req, res, next) {
     if (!gym) {
       return res.status(400).json({ success: false, message: 'Gym not found.' });
     }
+
+    decryptGymCredentials(gym);
 
     // 3. Verify Razorpay signature using raw body
     const signature = req.headers['x-razorpay-signature'];

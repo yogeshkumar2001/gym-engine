@@ -5,6 +5,7 @@ const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 const { getTargetDayWindow } = require('../utils/dateUtils');
 const { sendDailySummary } = require('../services/whatsappService');
+const { decryptGymCredentials } = require('../utils/encryption');
 
 /**
  * Computes today's stats for one gym and sends a WhatsApp daily summary
@@ -85,6 +86,7 @@ async function sendDailySummaries() {
   let gyms;
   try {
     gyms = await prisma.gym.findMany({
+      where: { status: 'active' },
       select: {
         id: true,
         name: true,
@@ -93,6 +95,7 @@ async function sendDailySummaries() {
         owner_phone: true,
       },
     });
+    gyms = gyms.map(g => decryptGymCredentials(g));
   } catch (err) {
     logger.error('[summaryCron] Failed to fetch gyms. Aborting run.', {
       message: err.message,

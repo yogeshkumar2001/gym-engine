@@ -14,6 +14,9 @@ const routes = require('./src/routes');
 const syncRoutes = require('./src/routes/syncRoutes');
 const renewalRoutes = require('./src/routes/renewalRoutes');
 const webhookRoutes = require('./src/routes/webhook.routes');
+const publicRoutes = require('./src/routes/public.routes');
+const ownerRoutes = require('./src/routes/owner.routes');
+const adminRoutes = require('./src/routes/admin.routes');
 const { initExpiryCron } = require('./src/cron/expiryCron');
 const { initSummaryCron } = require('./src/cron/summaryCron');
 
@@ -55,6 +58,9 @@ app.use(
 app.use('/', routes);
 app.use('/sync', syncRoutes);
 app.use('/trigger-renewal', renewalRoutes);
+app.use('/public', publicRoutes);
+app.use('/owner', ownerRoutes);
+app.use('/admin', adminRoutes);
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((req, res) => {

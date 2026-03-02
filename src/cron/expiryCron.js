@@ -14,6 +14,7 @@ const {
 } = require('../services/renewalService');
 const { createPaymentLinkForRenewal } = require('../services/razorpayService');
 const { sendRenewalReminder } = require('../services/whatsappService');
+const { decryptGymCredentials } = require('../utils/encryption');
 
 /**
  * Full pipeline for a single member within a gym run:
@@ -227,6 +228,7 @@ async function detectExpiringMembers() {
   let gyms;
   try {
     gyms = await prisma.gym.findMany({
+      where: { status: 'active' },
       select: {
         id: true,
         name: true,
@@ -236,6 +238,7 @@ async function detectExpiringMembers() {
         whatsapp_access_token: true,
       },
     });
+    gyms = gyms.map(g => decryptGymCredentials(g));
   } catch (err) {
     logger.error('[expiryCron] Failed to fetch gyms. Aborting run.', {
       message: err.message,

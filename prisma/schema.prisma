@@ -18,10 +18,16 @@ model Gym {
   google_sheet_id          String
   owner_phone              String
   created_at               DateTime @default(now())
+  status                   String   @default("onboarding")
+  onboarding_token         String?
+  last_health_check_at     DateTime?
+  last_error_message       String?  @db.Text
+  last_error_at            DateTime?
 
-  members  Member[]
-  payments Payment[]
-  renewals Renewal[]
+  members    Member[]
+  payments   Payment[]
+  renewals   Renewal[]
+  gymOwners  GymOwner[]
 }
 
 model Member {
@@ -68,6 +74,7 @@ model Renewal {
   whatsapp_message_id      String?
   whatsapp_sent_at         DateTime?
   whatsapp_status          String?
+  retry_count              Int      @default(0)
   created_at               DateTime @default(now())
   updated_at               DateTime @updatedAt
 
@@ -76,4 +83,16 @@ model Renewal {
 
   @@index([gym_id])
   @@index([member_id])
+}
+
+model GymOwner {
+  id         Int      @id @default(autoincrement())
+  gym_id     Int
+  name       String
+  email      String   @unique
+  phone      String
+  password   String
+  created_at DateTime @default(now())
+
+  gym Gym @relation(fields: [gym_id], references: [id], onDelete: Cascade)
 }
