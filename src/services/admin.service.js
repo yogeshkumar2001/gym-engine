@@ -2,6 +2,7 @@
 
 const prisma = require('../lib/prisma');
 const { getTargetDayWindow } = require('../utils/dateUtils');
+const { MAX_RETRY } = require('../utils/retryPolicy');
 
 // ─── Renewal status constants ─────────────────────────────────────────────────
 const RENEWAL_STATUSES = ['pending', 'processing_link', 'link_generated', 'paid', 'failed', 'dead'];
@@ -149,6 +150,7 @@ async function getGymDeepHealth(gymId) {
     stuckRenewalsCount,
     failedWhatsAppCount,
     retryAgg,
+    maxRetryReached,
   ] = await Promise.all([
     // 1. Gym lifecycle info — no credentials returned
     prisma.gym.findUnique({
@@ -204,11 +206,15 @@ async function getGymDeepHealth(gymId) {
       where: { gym_id: gymId, whatsapp_status: 'failed' },
     }),
 
-    // 8. Retry statistics
+    // 8. Retry avg — aggregate across all renewals for this gym
     prisma.renewal.aggregate({
-      _max: { retry_count: true },
       _avg: { retry_count: true },
       where: { gym_id: gymId },
+    }),
+
+    // 9. Count renewals that have hit or exceeded MAX_RETRY
+    prisma.renewal.count({
+      where: { gym_id: gymId, retry_count: { gte: MAX_RETRY } },
     }),
   ]);
 
@@ -238,8 +244,9 @@ async function getGymDeepHealth(gymId) {
     stuckRenewalsCount,
     failedWhatsAppCount,
     retryStats: {
-      maxRetryCount:  retryAgg._max.retry_count ?? 0,
-      avgRetryCount:  parseFloat((retryAgg._avg.retry_count ?? 0).toFixed(2)),
+      maxRetryReached,
+      deadRenewals: renewalBreakdown.dead,
+      avgRetryCount: parseFloat((retryAgg._avg.retry_count ?? 0).toFixed(2)),
     },
   };
 }

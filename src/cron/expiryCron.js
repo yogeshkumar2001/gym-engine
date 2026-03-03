@@ -15,6 +15,7 @@ const {
 const { createPaymentLinkForRenewal } = require('../services/razorpayService');
 const { sendRenewalReminder } = require('../services/whatsappService');
 const { decryptGymCredentials } = require('../utils/encryption');
+const { isRetryEligible, getBackoffMinutes } = require('../utils/retryPolicy');
 
 /**
  * Full pipeline for a single member within a gym run:
@@ -47,6 +48,30 @@ async function processMember(gym, member, now) {
   }
 
   let renewal = initialRenewal;
+
+  // Guard 1: dead renewals are permanently excluded — max retries exhausted.
+  if (renewal.status === 'dead') {
+    logger.info('[expiryCron] Skipping dead renewal', {
+      gym_id: gym.id,
+      member_id: member.id,
+      renewal_id: renewal.id,
+      retry_count: renewal.retry_count,
+    });
+    return false;
+  }
+
+  // Guard 2: exponential backoff — don't retry until the window has elapsed.
+  if (!isRetryEligible(renewal, now)) {
+    logger.debug('[expiryCron] Renewal in backoff window — skipping', {
+      gym_id: gym.id,
+      member_id: member.id,
+      renewal_id: renewal.id,
+      retry_count: renewal.retry_count,
+      last_retry_at: renewal.last_retry_at,
+      backoff_minutes: getBackoffMinutes(renewal.retry_count),
+    });
+    return false;
+  }
 
   // Step 2: generate Razorpay payment link — atomic lock prevents duplicate links
   // when two cron instances or manual triggers run simultaneously.

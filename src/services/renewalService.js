@@ -1,13 +1,17 @@
 'use strict';
 
 const prisma = require('../lib/prisma');
+const logger = require('../config/logger');
+const { MAX_RETRY, getBackoffMinutes } = require('../utils/retryPolicy');
 
-// Statuses that indicate an active renewal cycle for a member.
-// Used to prevent duplicate renewals within the same cycle.
-// 'processing_link' is a transient lock status held while Razorpay link
-// creation is in-flight; it must be included so createRenewalIfNotExists
-// does not create a second renewal for the same member during that window.
-const ACTIVE_STATUSES = ['pending', 'processing_link', 'link_generated'];
+// Statuses that indicate an in-progress renewal cycle for the purposes of
+// deduplication in createRenewalIfNotExists.  'dead' is intentionally excluded:
+// a dead renewal from a previous expiry cycle must not permanently block a new
+// renewal when the member's next expiry window arrives.
+const IN_PROGRESS_STATUSES = ['pending', 'processing_link', 'link_generated'];
+
+// Broader set used by getPendingRenewalsByGym (admin / health views).
+const ACTIVE_STATUSES = ['pending', 'processing_link', 'link_generated', 'dead'];
 
 /**
  * Creates a Renewal record for the given member unless one already exists
@@ -21,7 +25,7 @@ async function createRenewalIfNotExists(gymId, member) {
   const existing = await prisma.renewal.findFirst({
     where: {
       member_id: member.id,
-      status: { in: ACTIVE_STATUSES },
+      status: { in: IN_PROGRESS_STATUSES },
     },
   });
 
@@ -122,18 +126,54 @@ async function acquirePaymentLinkLock(renewalId) {
 }
 
 /**
- * Releases the payment-link lock by resetting status back to "pending".
- * Called when Razorpay link creation fails after the lock was acquired,
- * so the renewal is eligible for retry on the next run.
+ * Releases the payment-link lock after a Razorpay failure.
+ *
+ * Atomically (inside a transaction):
+ *   1. Resets status to "pending", increments retry_count, stamps last_retry_at.
+ *   2. If retry_count has now reached MAX_RETRY, upgrades status to "dead" — the
+ *      renewal will never be processed again by the cron.
+ *
+ * The two-step design is intentional: the first UPDATE always lands the retry
+ * increment; the conditional second UPDATE only fires when the threshold is hit.
+ * Both updates are within the same transaction so they either both commit or
+ * neither does — no partial state escapes.
  *
  * @param {number} renewalId
  * @returns {Promise<void>}
  */
 async function releasePaymentLinkLock(renewalId) {
-  await prisma.renewal.update({
-    where: { id: renewalId },
-    data: { status: 'pending' },
+  const updated = await prisma.$transaction(async (tx) => {
+    const incremented = await tx.renewal.update({
+      where: { id: renewalId },
+      data: {
+        status: 'pending',
+        retry_count: { increment: 1 },
+        last_retry_at: new Date(),
+      },
+    });
+
+    if (incremented.retry_count >= MAX_RETRY) {
+      return tx.renewal.update({
+        where: { id: renewalId },
+        data: { status: 'dead' },
+      });
+    }
+
+    return incremented;
   });
+
+  if (updated.status === 'dead') {
+    logger.warn('[renewalService] Renewal dead — max retries reached (payment link)', {
+      renewal_id: renewalId,
+      retry_count: updated.retry_count,
+    });
+  } else {
+    logger.info('[renewalService] Payment link lock released — retry scheduled', {
+      renewal_id: renewalId,
+      retry_count: updated.retry_count,
+      backoff_minutes: getBackoffMinutes(updated.retry_count),
+    });
+  }
 }
 
 /**
@@ -163,21 +203,52 @@ async function acquireWhatsappLock(renewalId, sentAt) {
 }
 
 /**
- * Releases the WhatsApp send lock by resetting whatsapp_sent_at to null
- * and recording "failed" status. Called when the Meta API throws after the
- * lock was acquired, so the renewal remains eligible for retry.
+ * Releases the WhatsApp send lock after a Meta API failure.
+ *
+ * Atomically (inside a transaction):
+ *   1. Resets whatsapp_sent_at to null, marks whatsapp_status "failed",
+ *      increments retry_count, stamps last_retry_at.
+ *      The renewal's main status stays "link_generated" — the payment link
+ *      is still valid; only the send attempt failed.
+ *   2. If retry_count has now reached MAX_RETRY, upgrades status to "dead".
  *
  * @param {number} renewalId
  * @returns {Promise<void>}
  */
 async function releaseWhatsappLock(renewalId) {
-  await prisma.renewal.update({
-    where: { id: renewalId },
-    data: {
-      whatsapp_sent_at: null,
-      whatsapp_status: 'failed',
-    },
+  const updated = await prisma.$transaction(async (tx) => {
+    const incremented = await tx.renewal.update({
+      where: { id: renewalId },
+      data: {
+        whatsapp_sent_at: null,
+        whatsapp_status: 'failed',
+        retry_count: { increment: 1 },
+        last_retry_at: new Date(),
+      },
+    });
+
+    if (incremented.retry_count >= MAX_RETRY) {
+      return tx.renewal.update({
+        where: { id: renewalId },
+        data: { status: 'dead' },
+      });
+    }
+
+    return incremented;
   });
+
+  if (updated.status === 'dead') {
+    logger.warn('[renewalService] Renewal dead — max retries reached (WhatsApp)', {
+      renewal_id: renewalId,
+      retry_count: updated.retry_count,
+    });
+  } else {
+    logger.info('[renewalService] WhatsApp lock released — retry scheduled', {
+      renewal_id: renewalId,
+      retry_count: updated.retry_count,
+      backoff_minutes: getBackoffMinutes(updated.retry_count),
+    });
+  }
 }
 
 /**

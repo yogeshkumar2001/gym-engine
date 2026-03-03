@@ -75,6 +75,7 @@ model Renewal {
   whatsapp_sent_at         DateTime?
   whatsapp_status          String?
   retry_count              Int      @default(0)
+  last_retry_at            DateTime?
   created_at               DateTime @default(now())
   updated_at               DateTime @updatedAt
 
