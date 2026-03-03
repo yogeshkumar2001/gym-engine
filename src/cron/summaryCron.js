@@ -86,7 +86,15 @@ async function sendDailySummaries() {
   let gyms;
   try {
     gyms = await prisma.gym.findMany({
-      where: { status: 'active' },
+      where: {
+        status: 'active',
+        // Mirrors the expiryCron subscription gate: skip gyms whose
+        // subscription has lapsed (non-null date in the past).
+        OR: [
+          { subscription_expires_at: null },
+          { subscription_expires_at: { gt: now } },
+        ],
+      },
       select: {
         id: true,
         name: true,

@@ -12,5 +12,6 @@ router.use(verifyAdmin);
 
 router.get('/global-health', adminController.globalHealth);
 router.get('/gym/:gymId/deep-health', adminController.gymDeepHealth);
+router.patch('/gym/:gymId/subscription', adminController.updateGymSubscription);
 
 module.exports = router;

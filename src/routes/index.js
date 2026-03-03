@@ -2,14 +2,18 @@
 
 const express = require('express');
 const router = express.Router();
+const verifyAdmin = require('../middleware/verifyAdmin');
 const gymRoutes = require('./gym.routes');
 const expiryRoutes = require('./expiry.routes');
 const reminderRoutes = require('./reminder.routes');
 const processRenewalsRoutes = require('./processRenewals.routes');
 const sendRenewalsRoutes = require('./sendRenewals.routes');
-const systemTestRoutes = require('./systemTest.routes');
+const syncRoutes = require('./syncRoutes');
+const renewalRoutes = require('./renewalRoutes');
 const { detectExpiringMembers } = require('../cron/expiryCron');
 const { sendDailySummaries } = require('../cron/summaryCron');
+
+// ─── Public ───────────────────────────────────────────────────────────────────
 
 router.get('/health', (req, res) => {
   res.status(200).json({
@@ -20,14 +24,19 @@ router.get('/health', (req, res) => {
   });
 });
 
-router.use('/gym', gymRoutes);
-router.use('/test-expiry', expiryRoutes);
-router.use('/trigger-reminder', reminderRoutes);
-router.use('/process-renewals', processRenewalsRoutes);
-router.use('/send-renewals', sendRenewalsRoutes);
-router.use('/system-test', systemTestRoutes);
+// ─── Admin-protected operational routes ──────────────────────────────────────
+// All routes below require a valid X-Admin-Key header.
 
-router.post('/test-cron', async (_req, res, next) => {
+router.use('/gym',              verifyAdmin, gymRoutes);
+router.use('/sync',             verifyAdmin, syncRoutes);
+router.use('/trigger-renewal',  verifyAdmin, renewalRoutes);
+router.use('/test-expiry',      verifyAdmin, expiryRoutes);
+router.use('/trigger-reminder', verifyAdmin, reminderRoutes);
+router.use('/process-renewals', verifyAdmin, processRenewalsRoutes);
+router.use('/send-renewals',    verifyAdmin, sendRenewalsRoutes);
+
+// Manual cron triggers — admin only; useful for one-off back-fills.
+router.post('/test-cron', verifyAdmin, async (_req, res, next) => {
   try {
     await detectExpiringMembers();
     res.status(200).json({ success: true, message: 'Cron executed. Check server logs.' });
@@ -36,7 +45,7 @@ router.post('/test-cron', async (_req, res, next) => {
   }
 });
 
-router.post('/test-summary-cron', async (_req, res, next) => {
+router.post('/test-summary-cron', verifyAdmin, async (_req, res, next) => {
   try {
     await sendDailySummaries();
     res.status(200).json({ success: true, message: 'Summary cron executed. Check server logs.' });

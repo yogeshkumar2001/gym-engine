@@ -5,6 +5,7 @@ const logger = require('../config/logger');
 const { sendSuccess, sendError } = require('../utils/response');
 const { sendRenewalReminder } = require('../services/whatsappService');
 const { acquireWhatsappLock, releaseWhatsappLock } = require('../services/renewalService');
+const { decryptGymCredentials } = require('../utils/encryption');
 
 /**
  * POST /send-renewals/:gymId
@@ -42,6 +43,9 @@ async function sendRenewals(req, res, next) {
     if (!gym) {
       return sendError(res, 'Gym not found.', 404);
     }
+
+    // Decrypt AES-256-GCM credentials before passing to Meta Cloud API.
+    decryptGymCredentials(gym);
 
     // 3. Fetch eligible renewals: link_generated AND not yet sent
     const renewals = await prisma.renewal.findMany({

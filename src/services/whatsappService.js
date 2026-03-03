@@ -4,7 +4,7 @@ const axios = require('axios');
 const logger = require('../config/logger');
 
 const GRAPH_API_VERSION = 'v22.0';
-const TEMPLATE_NAME = 'gym_daily_summary';
+const TEMPLATE_NAME = 'renewal_reminder';
 const SUMMARY_TEMPLATE_NAME = 'gym_daily_summary';
 
 /**

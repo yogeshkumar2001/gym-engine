@@ -3,6 +3,7 @@
 const prisma = require('../lib/prisma');
 const { getTargetDayWindow } = require('../utils/dateUtils');
 const { MAX_RETRY } = require('../utils/retryPolicy');
+const { getLastHealthCronRunAt } = require('../cron/credentialHealthCron');
 
 // ─── Renewal status constants ─────────────────────────────────────────────────
 const RENEWAL_STATUSES = ['pending', 'processing_link', 'link_generated', 'paid', 'failed', 'dead'];
@@ -50,6 +51,7 @@ async function getGlobalHealth() {
     revenueResult,
     stuckRenewalsCount,
     gymsWithErrorsLast24h,
+    gymsWithInvalidCredentials,
   ] = await Promise.all([
     // 1. Gym counts by lifecycle status
     prisma.gym.groupBy({
@@ -95,6 +97,18 @@ async function getGlobalHealth() {
         last_error_at: { gte: twentyFourHoursAgo },
       },
     }),
+
+    // 8. Gyms where at least one credential was explicitly marked invalid
+    //    by the credential health cron (false = checked & failed; null = never checked).
+    prisma.gym.count({
+      where: {
+        OR: [
+          { razorpay_valid: false },
+          { whatsapp_valid: false },
+          { sheet_valid:    false },
+        ],
+      },
+    }),
   ]);
 
   // Build lookup maps from groupBy results
@@ -124,6 +138,11 @@ async function getGlobalHealth() {
 
     stuckRenewalsCount,
     gymsWithErrorsLast24h,
+    gymsWithInvalidCredentials,
+
+    // Timestamp of the most recent credential health check run.
+    // null until the process has completed at least one run since startup.
+    lastHealthCheckRunAt: getLastHealthCronRunAt(),
   };
 }
 
@@ -156,11 +175,14 @@ async function getGymDeepHealth(gymId) {
     prisma.gym.findUnique({
       where: { id: gymId },
       select: {
-        id: true,
-        name: true,
-        status: true,
+        id:                   true,
+        name:                 true,
+        status:               true,
         last_health_check_at: true,
-        last_error_message: true,
+        last_error_message:   true,
+        razorpay_valid:       true,
+        whatsapp_valid:       true,
+        sheet_valid:          true,
       },
     }),
 
@@ -233,8 +255,12 @@ async function getGymDeepHealth(gymId) {
     renewalBreakdown[status] = renewalCounts[status] ?? 0;
   }
 
+  // Extract per-credential flags before building the gym summary object so
+  // credentials aren't duplicated at the top level.
+  const { razorpay_valid, whatsapp_valid, sheet_valid, ...gymSummary } = gym;
+
   return {
-    gym,
+    gym: gymSummary,
     renewalBreakdown,
     todayStats: {
       remindersSent,
@@ -248,7 +274,42 @@ async function getGymDeepHealth(gymId) {
       deadRenewals: renewalBreakdown.dead,
       avgRetryCount: parseFloat((retryAgg._avg.retry_count ?? 0).toFixed(2)),
     },
+    // Per-integration credential validity from the last health check cron run.
+    // null = never checked (gym was activated but health cron hasn't run yet).
+    credentialStatus: {
+      razorpayValid: razorpay_valid ?? null,
+      whatsappValid: whatsapp_valid ?? null,
+      sheetValid:    sheet_valid    ?? null,
+    },
   };
 }
 
-module.exports = { detectStuckRenewals, getGlobalHealth, getGymDeepHealth };
+// ─── Subscription Management ──────────────────────────────────────────────────
+
+/**
+ * Sets or clears the subscription expiry date for a gym.
+ *
+ * @param {number} gymId
+ * @param {Date|null} expiresAt  — null means unlimited (no enforcement)
+ * @returns {Promise<void>}
+ * @throws {{ status: 404 }} if the gym does not exist
+ */
+async function updateGymSubscription(gymId, expiresAt) {
+  const gym = await prisma.gym.findUnique({
+    where: { id: gymId },
+    select: { id: true },
+  });
+
+  if (!gym) {
+    const err = new Error('Gym not found.');
+    err.status = 404;
+    throw err;
+  }
+
+  await prisma.gym.update({
+    where: { id: gymId },
+    data: { subscription_expires_at: expiresAt },
+  });
+}
+
+module.exports = { detectStuckRenewals, getGlobalHealth, getGymDeepHealth, updateGymSubscription };

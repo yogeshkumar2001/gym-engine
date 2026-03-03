@@ -17,8 +17,11 @@ const ACTIVE_STATUSES = ['pending', 'processing_link', 'link_generated', 'dead']
  * Creates a Renewal record for the given member unless one already exists
  * in an active status (pending or link_generated).
  *
+ * Snapshots plan_duration_days from the member record at creation time so that
+ * subsequent plan changes do not affect outstanding renewals.
+ *
  * @param {number} gymId
- * @param {{ id: number, plan_amount: number }} member
+ * @param {{ id: number, plan_amount: number, plan_duration_days: number }} member
  * @returns {{ created: boolean, renewal: object }}
  */
 async function createRenewalIfNotExists(gymId, member) {
@@ -35,10 +38,11 @@ async function createRenewalIfNotExists(gymId, member) {
 
   const renewal = await prisma.renewal.create({
     data: {
-      gym_id: gymId,
-      member_id: member.id,
-      amount: member.plan_amount,
-      status: 'pending',
+      gym_id:            gymId,
+      member_id:         member.id,
+      amount:            member.plan_amount,
+      plan_duration_days: member.plan_duration_days ?? 30,
+      status:            'pending',
     },
   });
 
@@ -254,18 +258,23 @@ async function releaseWhatsappLock(renewalId) {
 /**
  * Atomically settles a paid renewal:
  * - Sets renewal.status = "paid"
- * - Extends member.expiry_date by 30 days
+ * - Extends member.expiry_date by planDurationDays (snapshotted on the renewal)
  * - Ensures member.status = "active"
  * Runs in a transaction so both updates succeed or neither does.
  *
  * @param {number} renewalId
  * @param {number} memberId
- * @param {Date} currentExpiry
+ * @param {Date}   currentExpiry
+ * @param {number} planDurationDays  — from renewal.plan_duration_days (e.g. 30, 90, 365)
  * @returns {Promise<void>}
  */
-async function settleRenewal(renewalId, memberId, currentExpiry) {
+async function settleRenewal(renewalId, memberId, currentExpiry, planDurationDays) {
+  const days = (Number.isInteger(planDurationDays) && planDurationDays > 0)
+    ? planDurationDays
+    : 30; // safe fallback — should never be reached with schema default
+
   const newExpiry = new Date(currentExpiry);
-  newExpiry.setUTCDate(newExpiry.getUTCDate() + 30);
+  newExpiry.setUTCDate(newExpiry.getUTCDate() + days);
 
   await prisma.$transaction([
     prisma.renewal.update({

@@ -5,6 +5,7 @@ const logger = require('../config/logger');
 const { sendSuccess, sendError } = require('../utils/response');
 const { createPaymentLinkForRenewal } = require('../services/razorpayService');
 const { markLinkGenerated } = require('../services/renewalService');
+const { decryptGymCredentials } = require('../utils/encryption');
 
 async function processRenewals(req, res, next) {
   try {
@@ -28,6 +29,9 @@ async function processRenewals(req, res, next) {
     if (!gym) {
       return sendError(res, 'Gym not found.', 404);
     }
+
+    // Decrypt AES-256-GCM credentials before passing to Razorpay SDK.
+    decryptGymCredentials(gym);
 
     // 3. Fetch all pending renewals for this gym, with member contact info
     const renewals = await prisma.renewal.findMany({

@@ -78,10 +78,18 @@ async function handleRazorpayWebhook(req, res, next) {
       return res.status(200).json({ success: true, message: 'Event ignored.' });
     }
 
-    // 8. Find renewal by payment link ID, include member for expiry extension
+    // 8. Find renewal by payment link ID scoped to this gym — prevents cross-tenant
+    //    settlement in the event that a link ID is somehow referenced in a webhook
+    //    destined for a different gym.
     const renewal = await prisma.renewal.findFirst({
-      where: { razorpay_payment_link_id: paymentLinkId },
-      include: {
+      where: {
+        razorpay_payment_link_id: paymentLinkId,
+        gym_id: gymId,
+      },
+      select: {
+        id:                true,
+        status:            true,
+        plan_duration_days: true,
         member: {
           select: { id: true, expiry_date: true },
         },
@@ -100,15 +108,20 @@ async function handleRazorpayWebhook(req, res, next) {
       return res.status(200).json({ success: true, message: 'Already processed.' });
     }
 
-    // 11. Settle: mark renewal paid + extend member expiry by 30 days
-    await settleRenewal(renewal.id, renewal.member.id, renewal.member.expiry_date);
+    // 11. Settle: mark renewal paid + extend member expiry by plan_duration_days
+    await settleRenewal(
+      renewal.id,
+      renewal.member.id,
+      renewal.member.expiry_date,
+      renewal.plan_duration_days,
+    );
 
     logger.info('[webhook] Renewal settled', {
-      gym_id: gymId,
-      renewal_id: renewal.id,
-      member_id: renewal.member.id,
-      payment_link_id: paymentLinkId,
-      new_expiry_offset: '+30 days',
+      gym_id:             gymId,
+      renewal_id:         renewal.id,
+      member_id:          renewal.member.id,
+      payment_link_id:    paymentLinkId,
+      plan_duration_days: renewal.plan_duration_days,
     });
 
     return res.status(200).json({ success: true, message: 'Payment settled.' });

@@ -186,6 +186,7 @@ async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHours
       phone: true,
       expiry_date: true,
       plan_amount: true,
+      plan_duration_days: true,
     },
   });
 
@@ -253,7 +254,15 @@ async function detectExpiringMembers() {
   let gyms;
   try {
     gyms = await prisma.gym.findMany({
-      where: { status: 'active' },
+      where: {
+        status: 'active',
+        // Subscription gate: include gyms with no expiry (unlimited/grandfathered)
+        // or those whose subscription has not yet lapsed.
+        OR: [
+          { subscription_expires_at: null },
+          { subscription_expires_at: { gt: now } },
+        ],
+      },
       select: {
         id: true,
         name: true,

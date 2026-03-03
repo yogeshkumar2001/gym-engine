@@ -39,4 +39,52 @@ async function gymDeepHealth(req, res, next) {
   }
 }
 
-module.exports = { globalHealth, gymDeepHealth };
+/**
+ * PATCH /admin/gym/:gymId/subscription
+ *
+ * Sets or clears the subscription expiry date for a gym.
+ *
+ * Body:
+ *   { "subscription_expires_at": "2025-12-31T23:59:59.000Z" }  — set expiry
+ *   { "subscription_expires_at": null }                          — unlimited
+ *
+ * The cron jobs (expiryCron, summaryCron) skip gyms whose subscription_expires_at
+ * is non-null and in the past.  Setting null re-enables a lapsed gym immediately.
+ */
+async function updateGymSubscription(req, res, next) {
+  const gymId = parseInt(req.params.gymId, 10);
+  if (!Number.isInteger(gymId) || gymId <= 0) {
+    return sendError(res, 'Invalid gymId.', 400);
+  }
+
+  if (!('subscription_expires_at' in req.body)) {
+    return sendError(res, 'subscription_expires_at is required.', 400);
+  }
+
+  const raw = req.body.subscription_expires_at;
+
+  let expiresAt = null;
+  if (raw !== null) {
+    const parsed = new Date(raw);
+    if (isNaN(parsed.getTime())) {
+      return sendError(res, 'subscription_expires_at must be a valid ISO 8601 date string or null.', 400);
+    }
+    expiresAt = parsed;
+  }
+
+  try {
+    await adminService.updateGymSubscription(gymId, expiresAt);
+    return sendSuccess(
+      res,
+      { gym_id: gymId, subscription_expires_at: expiresAt },
+      'Subscription updated successfully.'
+    );
+  } catch (err) {
+    if (err.status === 404) {
+      return sendError(res, err.message, 404);
+    }
+    next(err);
+  }
+}
+
+module.exports = { globalHealth, gymDeepHealth, updateGymSubscription };

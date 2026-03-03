@@ -26,77 +26,116 @@ function mapRowToMember(headers, row) {
 }
 
 async function syncGymMembers(gymId) {
-  // 1. Fetch gym
-  const gym = await prisma.gym.findUnique({ where: { id: gymId } });
+  // 1. Fetch gym — only the field we actually use.
+  const gym = await prisma.gym.findUnique({
+    where: { id: gymId },
+    select: { id: true, google_sheet_id: true },
+  });
   if (!gym) return null; // caller handles 404
 
-  // 2. Fetch sheet rows
+  // 2. Fetch sheet rows (external API call).
   const rows = await getSheetRows(gym.google_sheet_id);
 
-  const stats = { totalRows: 0, inserted: 0, updated: 0, skipped: 0 };
-
   if (rows.length < 2) {
-    // Empty sheet or header-only — nothing to sync
+    // Empty sheet or header-only — nothing to sync.
     return { totalRows: 0, inserted: 0, updated: 0, skipped: 0 };
   }
 
   const headers = rows[0].map((h) => h.trim().toLowerCase().replace(/\s+/g, '_'));
   const dataRows = rows.slice(1);
-  stats.totalRows = dataRows.length;
+
+  // 3. Fetch ALL existing members for this gym in one query and index by phone.
+  //    Replaces the per-row findUnique that caused the N+1 pattern.
+  const existingMembers = await prisma.member.findMany({
+    where: { gym_id: gymId },
+    select: { id: true, phone: true },
+  });
+  const existingMap = new Map(existingMembers.map((m) => [m.phone, m]));
+
+  // 4. Parse and validate every sheet row, splitting into create / update buckets.
+  //    No DB calls inside this loop.
+  const toCreate = [];
+  const toUpdate = [];
+  let skipped = 0;
 
   for (const row of dataRows) {
     const mapped = mapRowToMember(headers, row);
 
-    // Validate required fields present
+    // Validate required fields present.
     const missing = REQUIRED_COLUMNS.filter((c) => !mapped[c]);
     if (missing.length > 0) {
       logger.debug(`Skipping row — missing: ${missing.join(', ')}`);
-      stats.skipped++;
+      skipped++;
       continue;
     }
 
-    const join_date = parseDate(mapped.join_date);
-    const expiry_date = parseDate(mapped.expiry_date);
-    const plan_amount = parseFloat_(mapped.plan_amount);
+    const join_date    = parseDate(mapped.join_date);
+    const expiry_date  = parseDate(mapped.expiry_date);
+    const plan_amount  = parseFloat_(mapped.plan_amount);
 
     if (!join_date || !expiry_date || plan_amount === null) {
       logger.debug(`Skipping row "${mapped.name}" — invalid date or amount`);
-      stats.skipped++;
+      skipped++;
       continue;
     }
 
-    const createData = {
-      gym_id: gymId,
-      name: mapped.name,
-      phone: mapped.phone,
-      plan_name: mapped.plan_name,
-      plan_amount,
-      join_date,
-      expiry_date,
-    };
+    // plan_duration_days is optional in the sheet; default to 30 if absent or invalid.
+    const plan_duration_days = Math.max(1, parseInt(mapped.plan_duration_days || '30', 10) || 30);
 
-    const existing = await prisma.member.findUnique({
-      where: { gym_id_phone: { gym_id: gymId, phone: mapped.phone } },
-      select: { id: true },
-    });
-
-    await prisma.member.upsert({
-      where: { gym_id_phone: { gym_id: gymId, phone: mapped.phone } },
-      update: {
-        plan_name: mapped.plan_name,
-        plan_amount,
-        expiry_date,
-      },
-      create: createData,
-    });
+    const existing = existingMap.get(mapped.phone);
 
     if (existing) {
-      stats.updated++;
+      // Existing member — queue an update for the same fields the upsert updated.
+      // name, phone, join_date, and status are intentionally not modified on re-sync.
+      toUpdate.push({
+        id: existing.id,
+        data: {
+          plan_name:          mapped.plan_name,
+          plan_amount,
+          plan_duration_days,
+          expiry_date,
+        },
+      });
     } else {
-      stats.inserted++;
+      // New member — queue a create.
+      toCreate.push({
+        gym_id: gymId,
+        name: mapped.name,
+        phone: mapped.phone,
+        plan_name: mapped.plan_name,
+        plan_amount,
+        plan_duration_days,
+        join_date,
+        expiry_date,
+      });
     }
   }
 
+  // 5. Execute both batches — each is a single DB round-trip regardless of batch size.
+
+  let inserted = 0;
+  if (toCreate.length > 0) {
+    // skipDuplicates guards against duplicate phone numbers within the same sheet.
+    // Without it a second occurrence of the same phone would throw P2002.
+    // result.count reflects only rows actually inserted, so the stat is accurate.
+    const result = await prisma.member.createMany({
+      data: toCreate,
+      skipDuplicates: true,
+    });
+    inserted = result.count;
+  }
+
+  let updated = 0;
+  if (toUpdate.length > 0) {
+    // All updates run inside a single transaction — one BEGIN / COMMIT regardless
+    // of how many members are being updated.
+    await prisma.$transaction(
+      toUpdate.map(({ id, data }) => prisma.member.update({ where: { id }, data }))
+    );
+    updated = toUpdate.length;
+  }
+
+  const stats = { totalRows: dataRows.length, inserted, updated, skipped };
   logger.info(`Sync complete for gym ${gymId}: ${JSON.stringify(stats)}`);
   return stats;
 }

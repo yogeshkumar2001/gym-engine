@@ -8,26 +8,29 @@ datasource db {
 }
 
 model Gym {
-  id                       Int      @id @default(autoincrement())
+  id                       Int        @id @default(autoincrement())
   name                     String
   razorpay_key_id          String
   razorpay_key_secret      String
   razorpay_webhook_secret  String
   whatsapp_phone_number_id String
-  whatsapp_access_token    String   @db.Text
+  whatsapp_access_token    String     @db.Text
   google_sheet_id          String
   owner_phone              String
-  created_at               DateTime @default(now())
-  status                   String   @default("onboarding")
-  onboarding_token         String?
+  created_at               DateTime   @default(now())
+  last_error_message       String?    @db.Text
   last_health_check_at     DateTime?
-  last_error_message       String?  @db.Text
+  onboarding_token         String?
+  status                   String     @default("onboarding")
   last_error_at            DateTime?
-
-  members    Member[]
-  payments   Payment[]
-  renewals   Renewal[]
-  gymOwners  GymOwner[]
+  razorpay_valid           Boolean?
+  sheet_valid              Boolean?
+  whatsapp_valid           Boolean?
+  subscription_expires_at  DateTime?
+  gymOwners                GymOwner[]
+  members                  Member[]
+  payments                 Payment[]
+  renewals                 Renewal[]
 }
 
 model Member {
@@ -42,10 +45,10 @@ model Member {
   status                String    @default("active")
   last_reminder_sent_at DateTime?
   created_at            DateTime  @default(now())
-
-  gym      Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
-  payments Payment[]
-  renewals Renewal[]
+  plan_duration_days    Int       @default(30)
+  gym                   Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  payments              Payment[]
+  renewals              Renewal[]
 
   @@unique([gym_id, phone])
 }
@@ -58,29 +61,31 @@ model Payment {
   amount                   Float
   status                   String   @default("created")
   created_at               DateTime @default(now())
+  gym                      Gym      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  member                   Member   @relation(fields: [member_id], references: [id], onDelete: Cascade)
 
-  gym    Gym    @relation(fields: [gym_id], references: [id], onDelete: Cascade)
-  member Member @relation(fields: [member_id], references: [id], onDelete: Cascade)
+  @@index([gym_id], map: "Payment_gym_id_fkey")
+  @@index([member_id], map: "Payment_member_id_fkey")
 }
 
 model Renewal {
-  id                       Int      @id @default(autoincrement())
+  id                       Int       @id @default(autoincrement())
   gym_id                   Int
   member_id                Int
   amount                   Float
-  status                   String   @default("pending")
+  status                   String    @default("pending")
   razorpay_payment_link_id String?
   razorpay_short_url       String?
+  created_at               DateTime  @default(now())
+  updated_at               DateTime  @updatedAt
   whatsapp_message_id      String?
   whatsapp_sent_at         DateTime?
   whatsapp_status          String?
-  retry_count              Int      @default(0)
+  retry_count              Int       @default(0)
   last_retry_at            DateTime?
-  created_at               DateTime @default(now())
-  updated_at               DateTime @updatedAt
-
-  gym    Gym    @relation(fields: [gym_id], references: [id], onDelete: Cascade)
-  member Member @relation(fields: [member_id], references: [id], onDelete: Cascade)
+  plan_duration_days       Int       @default(30)
+  gym                      Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  member                   Member    @relation(fields: [member_id], references: [id], onDelete: Cascade)
 
   @@index([gym_id])
   @@index([member_id])
@@ -94,6 +99,7 @@ model GymOwner {
   phone      String
   password   String
   created_at DateTime @default(now())
+  gym        Gym      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
 
-  gym Gym @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  @@index([gym_id], map: "GymOwner_gym_id_fkey")
 }

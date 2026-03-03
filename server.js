@@ -2,6 +2,23 @@
 
 require('dotenv').config();
 
+// ─── Startup environment validation ─────────────────────────────────────────
+// Fail fast before any module initialisation if critical secrets are absent.
+// verifyAdmin.js also guards ADMIN_API_KEY at module load, but an explicit
+// check here surfaces all missing vars in a single error message.
+const REQUIRED_ENV = ['DATABASE_URL', 'MASTER_ENCRYPTION_KEY', 'JWT_SECRET', 'ADMIN_API_KEY'];
+const missingEnv = REQUIRED_ENV.filter((k) => !process.env[k]);
+if (missingEnv.length > 0) {
+  // eslint-disable-next-line no-console
+  console.error(`[startup] Missing required environment variables: ${missingEnv.join(', ')}`);
+  process.exit(1);
+}
+
+if (!process.env.ALLOWED_ORIGIN) {
+  // eslint-disable-next-line no-console
+  console.warn('[startup] ALLOWED_ORIGIN is not set — CORS will block all cross-origin requests.');
+}
+
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -11,23 +28,28 @@ const rateLimit = require('express-rate-limit');
 const logger = require('./src/config/logger');
 const prisma = require('./src/lib/prisma');
 const routes = require('./src/routes');
-const syncRoutes = require('./src/routes/syncRoutes');
-const renewalRoutes = require('./src/routes/renewalRoutes');
 const webhookRoutes = require('./src/routes/webhook.routes');
 const publicRoutes = require('./src/routes/public.routes');
 const ownerRoutes = require('./src/routes/owner.routes');
 const adminRoutes = require('./src/routes/admin.routes');
 const { initExpiryCron } = require('./src/cron/expiryCron');
 const { initSummaryCron } = require('./src/cron/summaryCron');
+const { initCredentialHealthCron } = require('./src/cron/credentialHealthCron');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-console.log(process.env.PORT)
+
 // ─── Security Headers ────────────────────────────────────────────────────────
 app.use(helmet());
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
-app.use(cors());
+// ALLOWED_ORIGIN must be set in production (e.g. "https://app.yourdomain.com").
+// If unset, CORS headers are omitted — all cross-origin requests are blocked.
+app.use(cors({
+  origin: process.env.ALLOWED_ORIGIN || false,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key'],
+}));
 
 // ─── Rate Limiting ───────────────────────────────────────────────────────────
 const limiter = rateLimit({
@@ -56,8 +78,6 @@ app.use(
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
 app.use('/', routes);
-app.use('/sync', syncRoutes);
-app.use('/trigger-renewal', renewalRoutes);
 app.use('/public', publicRoutes);
 app.use('/owner', ownerRoutes);
 app.use('/admin', adminRoutes);
@@ -99,8 +119,9 @@ async function start() {
     });
 
     // ─── Cron Jobs ─────────────────────────────────────────────────────────────
-    initExpiryCron();
-    initSummaryCron();
+    initExpiryCron();           // 09:00 IST — detect expiring members, create/send renewals
+    initSummaryCron();          // 20:00 IST — daily stats WhatsApp to gym owner
+    initCredentialHealthCron(); // 00:30 IST — validate Razorpay / WhatsApp / Google Sheet creds
 
     const shutdown = async (signal) => {
       logger.info(`${signal} received. Shutting down gracefully...`);

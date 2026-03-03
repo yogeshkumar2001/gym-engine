@@ -2,6 +2,7 @@
 
 const prisma = require('../lib/prisma');
 const { createRenewalPaymentLink } = require('../services/razorpayService');
+const { decryptGymCredentials } = require('../utils/encryption');
 const { sendSuccess, sendError } = require('../utils/response');
 const logger = require('../config/logger');
 
@@ -17,7 +18,15 @@ const triggerRenewal = async (req, res, next) => {
     logger.info(`[renewalController] Trigger renewal: gym=${gymId}, member=${memberId}`);
 
     const [gym, member] = await Promise.all([
-      prisma.gym.findUnique({ where: { id: gymId } }),
+      prisma.gym.findUnique({
+        where: { id: gymId },
+        select: {
+          id: true,
+          name: true,
+          razorpay_key_id: true,
+          razorpay_key_secret: true,
+        },
+      }),
       prisma.member.findUnique({ where: { id: memberId } }),
     ]);
 
@@ -30,6 +39,8 @@ const triggerRenewal = async (req, res, next) => {
     if (member.gym_id !== gymId) {
       return sendError(res, 'Member does not belong to this gym.', 403);
     }
+
+    decryptGymCredentials(gym);
 
     const result = await createRenewalPaymentLink(gym, member);
 
