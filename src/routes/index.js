@@ -12,6 +12,7 @@ const syncRoutes = require('./syncRoutes');
 const renewalRoutes = require('./renewalRoutes');
 const { detectExpiringMembers } = require('../cron/expiryCron');
 const { sendDailySummaries } = require('../cron/summaryCron');
+const { syncAllGymMembers } = require('../cron/memberSyncCron');
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
@@ -49,6 +50,15 @@ router.post('/test-summary-cron', verifyAdmin, async (_req, res, next) => {
   try {
     await sendDailySummaries();
     res.status(200).json({ success: true, message: 'Summary cron executed. Check server logs.' });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/test-sync-cron', verifyAdmin, async (_req, res, next) => {
+  try {
+    await syncAllGymMembers();
+    res.status(200).json({ success: true, message: 'Member sync cron executed. Check server logs.' });
   } catch (err) {
     next(err);
   }

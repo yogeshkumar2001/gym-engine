@@ -35,6 +35,7 @@ const adminRoutes = require('./src/routes/admin.routes');
 const { initExpiryCron } = require('./src/cron/expiryCron');
 const { initSummaryCron } = require('./src/cron/summaryCron');
 const { initCredentialHealthCron } = require('./src/cron/credentialHealthCron');
+const { initMemberSyncCron } = require('./src/cron/memberSyncCron');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -122,6 +123,7 @@ async function start() {
     initExpiryCron();           // 09:00 IST — detect expiring members, create/send renewals
     initSummaryCron();          // 20:00 IST — daily stats WhatsApp to gym owner
     initCredentialHealthCron(); // 00:30 IST — validate Razorpay / WhatsApp / Google Sheet creds
+    initMemberSyncCron();       // 02:00 IST — sync members from Google Sheet
 
     const shutdown = async (signal) => {
       logger.info(`${signal} received. Shutting down gracefully...`);

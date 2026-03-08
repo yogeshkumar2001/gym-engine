@@ -208,13 +208,11 @@ async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHours
       }
     } catch (err) {
       failed++;
-      logger.error('[expiryCron] Failed to process member', {
-        gym_id: gym.id,
-        member_id: member.id,
-        name: member.name,
-        message: err.message,
-        stack: err.stack,
-      });
+      const apiDetail = JSON.stringify(err.response?.data ?? err.error ?? null);
+      logger.error(
+        `[expiryCron] Failed to process member id=${member.id} "${member.name}" — ${err.message} | api: ${apiDetail}`,
+        { stack: err.stack }
+      );
     }
   }
 

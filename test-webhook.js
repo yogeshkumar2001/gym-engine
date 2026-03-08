@@ -4,8 +4,8 @@ const crypto = require('crypto');
 const http = require('http');
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const WEBHOOK_SECRET  = 'webhook_secret';
-const PAYMENT_LINK_ID = 'plink_SM1NmTXbfAHTw5';
+const WEBHOOK_SECRET  = 'secret@250126';
+const PAYMENT_LINK_ID = 'plink_SNqbaQvPPtFYFR';
 const GYM_ID          = 1;
 const PORT            = 4000;
 // ─────────────────────────────────────────────────────────────────────────────

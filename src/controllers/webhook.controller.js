@@ -1,10 +1,13 @@
 'use strict';
 
+const fs = require('fs');
 const crypto = require('crypto');
 const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 const { settleRenewal } = require('../services/renewalService');
 const { decryptGymCredentials } = require('../utils/encryption');
+const { generateInvoicePDF } = require('../services/invoiceService');
+const { sendPaymentConfirmation } = require('../services/whatsappService');
 
 async function handleRazorpayWebhook(req, res, next) {
   try {
@@ -14,10 +17,16 @@ async function handleRazorpayWebhook(req, res, next) {
       return res.status(400).json({ success: false, message: 'Invalid gymId.' });
     }
 
-    // 2. Fetch gym and webhook secret
+    // 2. Fetch gym — webhook secret for HMAC + WhatsApp creds for post-settlement
     const gym = await prisma.gym.findUnique({
       where: { id: gymId },
-      select: { id: true, razorpay_webhook_secret: true },
+      select: {
+        id:                       true,
+        name:                     true,
+        razorpay_webhook_secret:  true,
+        whatsapp_phone_number_id: true,
+        whatsapp_access_token:    true,
+      },
     });
 
     if (!gym) {
@@ -78,37 +87,50 @@ async function handleRazorpayWebhook(req, res, next) {
       return res.status(200).json({ success: true, message: 'Event ignored.' });
     }
 
-    // 8. Find renewal by payment link ID scoped to this gym — prevents cross-tenant
-    //    settlement in the event that a link ID is somehow referenced in a webhook
-    //    destined for a different gym.
+    // 8. Find renewal by payment link ID scoped to this gym
     const renewal = await prisma.renewal.findFirst({
       where: {
         razorpay_payment_link_id: paymentLinkId,
         gym_id: gymId,
       },
       select: {
-        id:                true,
-        status:            true,
-        plan_duration_days: true,
+        id:                       true,
+        status:                   true,
+        amount:                   true,
+        plan_duration_days:       true,
+        razorpay_payment_link_id: true,
         member: {
-          select: { id: true, expiry_date: true },
+          select: {
+            id:         true,
+            name:       true,
+            phone:      true,
+            plan_name:  true,
+            expiry_date: true,
+          },
         },
       },
     });
 
-    // 9. Not found → acknowledge and move on (may belong to another system)
+    // 9. Not found → acknowledge and move on
     if (!renewal) {
       logger.warn(`[webhook] No renewal found for payment_link_id=${paymentLinkId}`);
       return res.status(200).json({ success: true, message: 'Renewal not found, ignored.' });
     }
 
-    // 10. Already paid → idempotent, acknowledge without re-processing
+    // 10. Already paid → idempotent
     if (renewal.status === 'paid') {
       logger.info(`[webhook] Renewal already settled — renewal_id=${renewal.id}`);
       return res.status(200).json({ success: true, message: 'Already processed.' });
     }
 
-    // 11. Settle: mark renewal paid + extend member expiry by plan_duration_days
+    // 11. Compute new expiry (mirrors settleRenewal logic)
+    const days = (Number.isInteger(renewal.plan_duration_days) && renewal.plan_duration_days > 0)
+      ? renewal.plan_duration_days
+      : 30;
+    const newExpiry = new Date(renewal.member.expiry_date);
+    newExpiry.setUTCDate(newExpiry.getUTCDate() + days);
+
+    // 12. Settle: mark renewal paid + extend member expiry
     await settleRenewal(
       renewal.id,
       renewal.member.id,
@@ -122,7 +144,36 @@ async function handleRazorpayWebhook(req, res, next) {
       member_id:          renewal.member.id,
       payment_link_id:    paymentLinkId,
       plan_duration_days: renewal.plan_duration_days,
+      new_expiry:         newExpiry.toISOString(),
     });
+
+    // 13. Post-settlement: generate invoice + send WhatsApp confirmation.
+    //     Wrapped in try/catch — failures must NOT block the 200 response to Razorpay.
+    let invoicePath = null;
+    try {
+      invoicePath = await generateInvoicePDF(gym, renewal.member, renewal, newExpiry);
+      await sendPaymentConfirmation(gym, renewal.member, renewal, newExpiry, invoicePath);
+      logger.info('[webhook] Invoice and confirmation sent', {
+        gym_id: gymId,
+        renewal_id: renewal.id,
+      });
+    } catch (postErr) {
+      logger.error('[webhook] Post-settlement notification failed (payment still settled)', {
+        gym_id:     gymId,
+        renewal_id: renewal.id,
+        message:    postErr.message,
+        api_error:  postErr.response?.data ?? null,
+      });
+    } finally {
+      // Clean up temp PDF regardless of send outcome
+      if (invoicePath) {
+        fs.unlink(invoicePath, (unlinkErr) => {
+          if (unlinkErr) {
+            logger.warn(`[webhook] Could not delete invoice file: ${invoicePath}`);
+          }
+        });
+      }
+    }
 
     return res.status(200).json({ success: true, message: 'Payment settled.' });
   } catch (err) {
