@@ -84,6 +84,10 @@ model Renewal {
   retry_count              Int       @default(0)
   last_retry_at            DateTime?
   plan_duration_days       Int       @default(30)
+  recovery_step            Int       @default(0)
+  discount_percent         Float?
+  discounted_amount        Float?
+  recovery_completed       Boolean   @default(false)
   gym                      Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
   member                   Member    @relation(fields: [member_id], references: [id], onDelete: Cascade)
 

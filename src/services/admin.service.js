@@ -312,4 +312,84 @@ async function updateGymSubscription(gymId, expiresAt) {
   });
 }
 
-module.exports = { detectStuckRenewals, getGlobalHealth, getGymDeepHealth, updateGymSubscription };
+// ─── Recovery Stats ───────────────────────────────────────────────────────────
+
+/**
+ * Returns recovery engine metrics for a gym.
+ *
+ * expired_unpaid_members — active members past expiry with no paid renewal
+ * in_recovery_count      — link_generated renewals currently in recovery (step 1-2)
+ * recovery_step_breakdown — count per step { step_1, step_2 }
+ * recovered_count        — paid renewals that came through recovery (recovery_step > 0)
+ * recovered_revenue      — sum of their amounts
+ * discount_applied_count — renewals where a discount link was created (step 2+)
+ * recovery_rate          — recovered / (recovered + expired_unpaid)
+ *
+ * Queries run sequentially to respect the pool limit of 5.
+ *
+ * @param {number} gymId
+ * @returns {Promise<object>}
+ */
+async function getRecoveryStats(gymId) {
+  const now = new Date();
+
+  const expiredUnpaidCount = await prisma.member.count({
+    where: {
+      gym_id: gymId,
+      status: 'active',
+      expiry_date: { lt: now },
+      renewals: { none: { status: 'paid' } },
+    },
+  });
+
+  const recoveryBreakdown = await prisma.renewal.groupBy({
+    by: ['recovery_step'],
+    where: {
+      gym_id: gymId,
+      status: 'link_generated',
+      recovery_step: { gt: 0 },
+    },
+    _count: { id: true },
+  });
+
+  const recoveredResult = await prisma.renewal.aggregate({
+    where: {
+      gym_id: gymId,
+      status: 'paid',
+      recovery_step: { gt: 0 },
+    },
+    _count: { id: true },
+    _sum: { amount: true },
+  });
+
+  const discountAppliedCount = await prisma.renewal.count({
+    where: {
+      gym_id: gymId,
+      discount_percent: { not: null },
+    },
+  });
+
+  const stepBreakdown = { step_1: 0, step_2: 0 };
+  for (const row of recoveryBreakdown) {
+    if (row.recovery_step === 1) stepBreakdown.step_1 = row._count.id;
+    if (row.recovery_step === 2) stepBreakdown.step_2 = row._count.id;
+  }
+
+  const inRecoveryCount = stepBreakdown.step_1 + stepBreakdown.step_2;
+  const recoveredCount = recoveredResult._count.id;
+  const recoveredRevenue = recoveredResult._sum.amount || 0;
+  const total = recoveredCount + expiredUnpaidCount;
+  const recoveryRate = total > 0 ? Math.round((recoveredCount / total) * 1000) / 1000 : 0;
+
+  return {
+    expired_unpaid_members: expiredUnpaidCount,
+    in_recovery_count: inRecoveryCount,
+    recovery_step_breakdown: stepBreakdown,
+    recovered_count: recoveredCount,
+    recovered_revenue: Math.round(recoveredRevenue * 100) / 100,
+    discount_applied_count: discountAppliedCount,
+    recovery_rate: recoveryRate,
+  };
+}
+
+module.exports = { detectStuckRenewals, getGlobalHealth, getGymDeepHealth, updateGymSubscription, getRecoveryStats };

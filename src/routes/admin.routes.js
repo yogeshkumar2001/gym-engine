@@ -20,4 +20,7 @@ router.get('/gym/:gymId/forecast', analyticsController.revenueForecast);
 router.get('/gym/:gymId/ltv-report', analyticsController.ltvReport);
 router.get('/gym/:gymId/plan-report', analyticsController.planReport);
 
+// Recovery Engine
+router.get('/gym/:gymId/recovery-stats', adminController.getRecoveryStats);
+
 module.exports = router;

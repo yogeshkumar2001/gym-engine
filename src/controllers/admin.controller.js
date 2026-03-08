@@ -4,6 +4,15 @@ const adminService = require('../services/admin.service');
 const { sendSuccess, sendError } = require('../utils/response');
 
 /**
+ * Validates and parses gymId from req.params — shared by all admin handlers.
+ * @returns {number|null}
+ */
+function parseGymId(req) {
+  const gymId = parseInt(req.params.gymId, 10);
+  return Number.isInteger(gymId) && gymId > 0 ? gymId : null;
+}
+
+/**
  * GET /admin/global-health
  * Returns platform-wide aggregated health metrics.
  * No gym_id context — reads across all tenants.
@@ -87,4 +96,20 @@ async function updateGymSubscription(req, res, next) {
   }
 }
 
-module.exports = { globalHealth, gymDeepHealth, updateGymSubscription };
+/**
+ * GET /admin/gym/:gymId/recovery-stats
+ * Returns recovery engine metrics for a gym.
+ */
+async function getRecoveryStats(req, res, next) {
+  const gymId = parseGymId(req);
+  if (!gymId) return sendError(res, 'Invalid gymId.', 400);
+
+  try {
+    const data = await adminService.getRecoveryStats(gymId);
+    return sendSuccess(res, data, 'Recovery stats retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { globalHealth, gymDeepHealth, updateGymSubscription, getRecoveryStats };

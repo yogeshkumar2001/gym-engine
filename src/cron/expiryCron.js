@@ -11,11 +11,22 @@ const {
   releasePaymentLinkLock,
   acquireWhatsappLock,
   releaseWhatsappLock,
+  advanceRecoveryStep,
+  applyDiscountToRenewal,
+  markRecoveryCompleted,
 } = require('../services/renewalService');
-const { createPaymentLinkForRenewal } = require('../services/razorpayService');
-const { sendRenewalReminder } = require('../services/whatsappService');
+const { createPaymentLinkForRenewal, createDiscountedPaymentLink } = require('../services/razorpayService');
+const {
+  sendRenewalReminder,
+  sendRecoveryFollowup,
+  sendDiscountOffer,
+  sendFinalNotice,
+} = require('../services/whatsappService');
 const { decryptGymCredentials } = require('../utils/encryption');
 const { isRetryEligible, getBackoffMinutes } = require('../utils/retryPolicy');
+
+// Discount percentage communicated (and applied) in recovery step 2.
+const RECOVERY_DISCOUNT_PERCENT = 5;
 
 /**
  * Full pipeline for a single member within a gym run:
@@ -153,6 +164,99 @@ async function processMember(gym, member, now) {
 }
 
 /**
+ * Recovery pipeline for a renewal that has already been through the initial
+ * reminder (recovery_step = 0) but the member has not yet paid.
+ *
+ * Step sequence (each fires ~48h after the previous, gated by last_reminder_sent_at):
+ *   0 → 1  Follow-up: resend the existing payment link with a reminder message.
+ *   1 → 2  Discount:  create a 5%-off payment link and send a special offer.
+ *   2 → 3  Final:     send a last-chance message with the current link.
+ *                     Sets recovery_completed = true — no further recovery runs.
+ *
+ * Uses advanceRecoveryStep() as the atomic lock: exactly one concurrent caller
+ * can advance from step N to N+1 (same MySQL serialization as acquirePaymentLinkLock).
+ * On WhatsApp failure the step advance is NOT rolled back — the member misses
+ * that specific follow-up but the recovery sequence continues on the next run.
+ *
+ * @param {{ id, razorpay_key_id, razorpay_key_secret,
+ *           whatsapp_phone_number_id, whatsapp_access_token }} gym
+ * @param {{ id, recovery_step, razorpay_short_url }} renewal
+ * @param {{ id, name, phone }} member
+ * @param {Date} now
+ * @returns {Promise<boolean>} true if a message was sent this run
+ */
+async function processRecovery(gym, renewal, member, now) {
+  const fromStep = renewal.recovery_step;
+  const toStep = fromStep + 1;
+
+  // Atomically claim this step — prevents double-processing across concurrent runs
+  const advanced = await advanceRecoveryStep(renewal.id, fromStep, toStep);
+  if (!advanced) {
+    logger.debug('[expiryCron] Recovery step already advanced by another process', {
+      gym_id: gym.id, renewal_id: renewal.id, member_id: member.id, fromStep, toStep,
+    });
+    return false;
+  }
+
+  try {
+    let messageId = null;
+
+    if (toStep === 1) {
+      // Follow-up: same link, different message
+      ({ messageId } = await sendRecoveryFollowup(gym, renewal, member));
+
+    } else if (toStep === 2) {
+      // Discount: create new Razorpay link at reduced price
+      const discountedAmount =
+        Math.round(renewal.amount * (1 - RECOVERY_DISCOUNT_PERCENT / 100) * 100) / 100;
+
+      const { paymentLinkId, shortUrl } = await createDiscountedPaymentLink(
+        gym, renewal, member, discountedAmount
+      );
+      await applyDiscountToRenewal(
+        renewal.id, paymentLinkId, shortUrl, RECOVERY_DISCOUNT_PERCENT, discountedAmount
+      );
+      // Send with the NEW short URL
+      ({ messageId } = await sendDiscountOffer(
+        gym, { ...renewal, razorpay_short_url: shortUrl }, member, RECOVERY_DISCOUNT_PERCENT
+      ));
+
+    } else if (toStep === 3) {
+      // Final notice — use whatever short URL is currently on the renewal
+      // (may be the discounted link from step 2)
+      const latestRenewal = await prisma.renewal.findUnique({
+        where: { id: renewal.id },
+        select: { razorpay_short_url: true },
+      });
+      ({ messageId } = await sendFinalNotice(
+        gym, { ...renewal, razorpay_short_url: latestRenewal.razorpay_short_url }, member
+      ));
+      await markRecoveryCompleted(renewal.id);
+    }
+
+    // Stamp the renewal's last whatsapp fields for tracking
+    await prisma.renewal.update({
+      where: { id: renewal.id },
+      data: { whatsapp_message_id: messageId, whatsapp_sent_at: now, whatsapp_status: 'sent' },
+    });
+
+    logger.info('[expiryCron] Recovery message sent', {
+      gym_id: gym.id, renewal_id: renewal.id, member_id: member.id, step: toStep,
+    });
+    return true;
+
+  } catch (err) {
+    // Step was already advanced — don't revert. Log the send failure and move on.
+    // The recovery sequence continues from the advanced step on the next cron run.
+    logger.error('[expiryCron] Recovery message failed — step advanced but send failed', {
+      gym_id: gym.id, renewal_id: renewal.id, member_id: member.id, step: toStep,
+      message: err.message,
+    });
+    return false;
+  }
+}
+
+/**
  * Processes one gym:
  * - Finds active members expiring in 3 days who haven't been recently reminded.
  * - Runs the full create → link → WhatsApp pipeline per member.
@@ -190,11 +294,6 @@ async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHours
     },
   });
 
-  if (members.length === 0) {
-    logger.info(`[expiryCron] gym_id=${gym.id} "${gym.name}": no eligible members.`);
-    return;
-  }
-
   let remindersSent = 0;
   let failed = 0;
   const notifiedMemberIds = []; // members who received a WhatsApp this run
@@ -216,8 +315,56 @@ async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHours
     }
   }
 
-  // Batch-update last_reminder_sent_at only for members who were just notified.
-  // This drives the 48-hour re-fetch guard on the next cron run.
+  // ── Recovery: follow-up for members who got an initial reminder but haven't paid ──
+  //
+  // Finds link_generated renewals where:
+  //   - recovery not yet completed
+  //   - step is 0-2 (step 3 triggers markRecoveryCompleted, never re-runs)
+  //   - previous WhatsApp was sent (whatsapp_status = 'sent' — guards against
+  //     re-running after a send failure that left recovery_step already advanced)
+  //   - member hasn't been reminded in the last 48 hours
+  const recoveryRenewals = await prisma.renewal.findMany({
+    where: {
+      gym_id: gym.id,
+      status: 'link_generated',
+      recovery_completed: false,
+      recovery_step: { lt: 3 },
+      whatsapp_status: 'sent',
+      member: {
+        OR: [
+          { last_reminder_sent_at: null },
+          { last_reminder_sent_at: { lte: fortyEightHoursAgo } },
+        ],
+      },
+    },
+    include: {
+      member: {
+        select: { id: true, name: true, phone: true, expiry_date: true, plan_amount: true },
+      },
+    },
+  });
+
+  for (const renewal of recoveryRenewals) {
+    const { member: recoveryMember } = renewal;
+    try {
+      const notified = await processRecovery(gym, renewal, recoveryMember, now);
+      if (notified) {
+        remindersSent++;
+        if (!notifiedMemberIds.includes(recoveryMember.id)) {
+          notifiedMemberIds.push(recoveryMember.id);
+        }
+      }
+    } catch (err) {
+      failed++;
+      logger.error(
+        `[expiryCron] Recovery error for member id=${recoveryMember.id} "${recoveryMember.name}" — ${err.message}`,
+        { stack: err.stack }
+      );
+    }
+  }
+
+  // Batch-update last_reminder_sent_at for all members who received any message
+  // (initial reminder or recovery follow-up) — drives the 48-hour re-fetch gate.
   if (notifiedMemberIds.length > 0) {
     await prisma.member.updateMany({
       where: { id: { in: notifiedMemberIds } },
@@ -225,9 +372,15 @@ async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHours
     });
   }
 
+  if (members.length === 0 && recoveryRenewals.length === 0) {
+    logger.info(`[expiryCron] gym_id=${gym.id} "${gym.name}": no eligible members or recovery candidates.`);
+    return;
+  }
+
   logger.info(
     `[expiryCron] gym_id=${gym.id} "${gym.name}": ` +
-    `eligible=${members.length}, reminders_sent=${remindersSent}, failed=${failed}`
+    `eligible=${members.length}, recovery_candidates=${recoveryRenewals.length}, ` +
+    `reminders_sent=${remindersSent}, failed=${failed}`
   );
 }
 

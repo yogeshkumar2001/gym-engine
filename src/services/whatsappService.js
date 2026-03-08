@@ -249,4 +249,123 @@ async function sendPaymentConfirmation(gym, member, renewal, newExpiry, invoiceP
   });
 }
 
-module.exports = { sendRenewalReminder, sendDailySummary, sendPaymentConfirmation };
+// ─── Recovery Engine Templates ────────────────────────────────────────────────
+
+/**
+ * Recovery Step 1 — Follow-up reminder.
+ * Template: "renewal_followup"
+ * Parameters: {{1}} member.name, {{2}} renewal.razorpay_short_url
+ */
+async function sendRecoveryFollowup(gym, renewal, member) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${gym.whatsapp_phone_number_id}/messages`;
+  const response = await axios.post(url, {
+    messaging_product: 'whatsapp',
+    to: member.phone,
+    type: 'template',
+    template: {
+      name: 'renewal_followup',
+      language: { code: 'en' },
+      components: [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: member.name },
+          { type: 'text', text: renewal.razorpay_short_url },
+        ],
+      }],
+    },
+  }, {
+    headers: {
+      Authorization: `Bearer ${gym.whatsapp_access_token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const messageId = response.data?.messages?.[0]?.id ?? null;
+  logger.info('[whatsappService] Recovery follow-up sent', {
+    gym_id: gym.id, renewal_id: renewal.id, member_id: member.id, whatsapp_message_id: messageId,
+  });
+  return { messageId };
+}
+
+/**
+ * Recovery Step 2 — Discount offer.
+ * Template: "renewal_discount_offer"
+ * Parameters: {{1}} member.name, {{2}} discountPercent (e.g. "5"), {{3}} razorpay_short_url
+ */
+async function sendDiscountOffer(gym, renewal, member, discountPercent) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${gym.whatsapp_phone_number_id}/messages`;
+  const response = await axios.post(url, {
+    messaging_product: 'whatsapp',
+    to: member.phone,
+    type: 'template',
+    template: {
+      name: 'renewal_discount_offer',
+      language: { code: 'en' },
+      components: [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: member.name },
+          { type: 'text', text: String(discountPercent) },
+          { type: 'text', text: renewal.razorpay_short_url },
+        ],
+      }],
+    },
+  }, {
+    headers: {
+      Authorization: `Bearer ${gym.whatsapp_access_token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const messageId = response.data?.messages?.[0]?.id ?? null;
+  logger.info('[whatsappService] Discount offer sent', {
+    gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+    discount_percent: discountPercent, whatsapp_message_id: messageId,
+  });
+  return { messageId };
+}
+
+/**
+ * Recovery Step 3 — Final notice (last chance).
+ * Template: "renewal_final"
+ * Parameters: {{1}} member.name, {{2}} renewal.razorpay_short_url
+ */
+async function sendFinalNotice(gym, renewal, member) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${gym.whatsapp_phone_number_id}/messages`;
+  const response = await axios.post(url, {
+    messaging_product: 'whatsapp',
+    to: member.phone,
+    type: 'template',
+    template: {
+      name: 'renewal_final',
+      language: { code: 'en' },
+      components: [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: member.name },
+          { type: 'text', text: renewal.razorpay_short_url },
+        ],
+      }],
+    },
+  }, {
+    headers: {
+      Authorization: `Bearer ${gym.whatsapp_access_token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const messageId = response.data?.messages?.[0]?.id ?? null;
+  logger.info('[whatsappService] Final notice sent', {
+    gym_id: gym.id, renewal_id: renewal.id, member_id: member.id, whatsapp_message_id: messageId,
+  });
+  return { messageId };
+}
+
+module.exports = {
+  sendRenewalReminder,
+  sendDailySummary,
+  sendPaymentConfirmation,
+  sendRecoveryFollowup,
+  sendDiscountOffer,
+  sendFinalNotice,
+};

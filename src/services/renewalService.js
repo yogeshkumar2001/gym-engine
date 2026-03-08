@@ -291,6 +291,63 @@ async function settleRenewal(renewalId, memberId, currentExpiry, planDurationDay
   ]);
 }
 
+// ─── Recovery Engine ──────────────────────────────────────────────────────────
+
+/**
+ * Atomically advances the recovery_step from `fromStep` to `toStep`.
+ * Uses MySQL row-level locking (same pattern as acquirePaymentLinkLock):
+ * exactly one concurrent caller receives count=1; all others receive count=0.
+ *
+ * @param {number} renewalId
+ * @param {number} fromStep  — expected current step (guard condition)
+ * @param {number} toStep    — next step to transition to
+ * @returns {Promise<boolean>} true if this caller owns the transition
+ */
+async function advanceRecoveryStep(renewalId, fromStep, toStep) {
+  const result = await prisma.renewal.updateMany({
+    where: { id: renewalId, recovery_step: fromStep },
+    data: { recovery_step: toStep },
+  });
+  return result.count === 1;
+}
+
+/**
+ * Updates a renewal with a discounted Razorpay payment link.
+ * Replaces the original link so webhook settlement works for the new link.
+ * Also updates `amount` to the discounted value for correct revenue tracking.
+ *
+ * @param {number} renewalId
+ * @param {string} paymentLinkId   — new Razorpay link ID
+ * @param {string} shortUrl        — new short URL for WhatsApp
+ * @param {number} discountPercent — e.g. 5 for 5%
+ * @param {number} discountedAmount
+ */
+async function applyDiscountToRenewal(renewalId, paymentLinkId, shortUrl, discountPercent, discountedAmount) {
+  await prisma.renewal.update({
+    where: { id: renewalId },
+    data: {
+      razorpay_payment_link_id: paymentLinkId,
+      razorpay_short_url: shortUrl,
+      discount_percent: discountPercent,
+      discounted_amount: discountedAmount,
+      amount: discountedAmount,
+    },
+  });
+}
+
+/**
+ * Marks a renewal's recovery sequence as completed.
+ * Called after the final notice (step 3) is sent.
+ *
+ * @param {number} renewalId
+ */
+async function markRecoveryCompleted(renewalId) {
+  await prisma.renewal.update({
+    where: { id: renewalId },
+    data: { recovery_completed: true },
+  });
+}
+
 module.exports = {
   createRenewalIfNotExists,
   getPendingRenewalsByGym,
@@ -301,4 +358,7 @@ module.exports = {
   acquireWhatsappLock,
   releaseWhatsappLock,
   settleRenewal,
+  advanceRecoveryStep,
+  applyDiscountToRenewal,
+  markRecoveryCompleted,
 };
