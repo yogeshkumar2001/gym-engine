@@ -12,7 +12,10 @@ function verifyJWT(req, res, next) {
   }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    const payload = jwt.verify(token, process.env.JWT_SECRET, {
+      issuer: 'gym-renewal-engine',
+      audience: 'owner-dashboard',
+    });
     req.gymOwner = { owner_id: payload.owner_id, gym_id: payload.gym_id };
     next();
   } catch (err) {

@@ -12,6 +12,7 @@ const router = Router();
 router.use(verifyAdmin);
 
 router.get('/global-health', adminController.globalHealth);
+router.get('/gyms', adminController.listGyms);
 router.get('/gym/:gymId/deep-health', adminController.gymDeepHealth);
 router.patch('/gym/:gymId/subscription', adminController.updateGymSubscription);
 

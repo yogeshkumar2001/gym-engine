@@ -1,7 +1,9 @@
 'use strict';
 
+const { Prisma } = require('@prisma/client');
 const prisma = require('../lib/prisma');
 const { getSheetRows } = require('./googleSheetService');
+const { decryptGymCredentials } = require('../utils/encryption');
 const logger = require('../config/logger');
 
 // Required columns (lowercase, trimmed)
@@ -35,6 +37,10 @@ async function syncGymMembers(gymId) {
     select: { id: true, google_sheet_id: true },
   });
   if (!gym) return null; // caller handles 404
+
+  // Decrypt google_sheet_id (now encrypted at rest; backward-compat: decrypt()
+  // returns plaintext as-is if not prefixed with 'enc:').
+  decryptGymCredentials(gym);
 
   // 2. Fetch sheet rows (external API call).
   const rows = await getSheetRows(gym.google_sheet_id);
@@ -147,12 +153,24 @@ async function syncGymMembers(gymId) {
     inserted = result.count;
   }
 
-  // 7. Execute update batch inside a single transaction.
+  // 7. Bulk-update existing members — single SQL query via CASE WHEN (O(1) round trips).
   let updated = 0;
   if (toUpdate.length > 0) {
-    await prisma.$transaction(
-      toUpdate.map(({ id, data }) => prisma.member.update({ where: { id }, data }))
-    );
+    const planNameFrags  = toUpdate.map(u => Prisma.sql`WHEN ${u.id} THEN ${u.data.plan_name}`);
+    const amountFrags    = toUpdate.map(u => Prisma.sql`WHEN ${u.id} THEN ${u.data.plan_amount}`);
+    const daysFrags      = toUpdate.map(u => Prisma.sql`WHEN ${u.id} THEN ${u.data.plan_duration_days}`);
+    const expiryFrags    = toUpdate.map(u => Prisma.sql`WHEN ${u.id} THEN ${u.data.expiry_date}`);
+    const ids            = toUpdate.map(u => u.id);
+
+    await prisma.$executeRaw(Prisma.sql`
+      UPDATE Member SET
+        plan_name          = CASE id ${Prisma.join(planNameFrags, ' ')} END,
+        plan_amount        = CASE id ${Prisma.join(amountFrags,   ' ')} END,
+        plan_duration_days = CASE id ${Prisma.join(daysFrags,     ' ')} END,
+        expiry_date        = CASE id ${Prisma.join(expiryFrags,   ' ')} END,
+        status             = 'active'
+      WHERE id IN (${Prisma.join(ids)})
+    `);
     updated = toUpdate.length;
   }
 
@@ -173,6 +191,17 @@ async function syncGymMembers(gymId) {
 
   const stats = { totalRows: dataRows.length, inserted, updated, skipped, deactivated };
   logger.info(`[syncGymMembers] gym_id=${gymId} complete: ${JSON.stringify(stats)}`);
+
+  // Persist sync timestamp, member count, and clear any previous sync error.
+  await prisma.gym.update({
+    where: { id: gymId },
+    data: {
+      last_synced_at: new Date(),
+      last_sync_member_count: inserted + updated,
+      last_sync_error: null,
+    },
+  });
+
   return stats;
 }
 

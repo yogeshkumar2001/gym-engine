@@ -27,6 +27,9 @@ model Gym {
   sheet_valid              Boolean?
   whatsapp_valid           Boolean?
   subscription_expires_at  DateTime?
+  last_synced_at           DateTime?
+  last_sync_member_count   Int?
+  last_sync_error          String?   @db.Text
   gymOwners                GymOwner[]
   members                  Member[]
   payments                 Payment[]
@@ -57,6 +60,8 @@ model Member {
   reactivation_campaigns      ReactivationCampaign[]
 
   @@unique([gym_id, phone])
+  @@index([gym_id, status])
+  @@index([gym_id, expiry_date])
 }
 
 model Payment {
@@ -98,6 +103,7 @@ model Renewal {
   member                   Member    @relation(fields: [member_id], references: [id], onDelete: Cascade)
 
   @@index([gym_id])
+  @@index([gym_id, status])
   @@index([member_id])
 }
 
@@ -105,8 +111,8 @@ model GymOwner {
   id         Int      @id @default(autoincrement())
   gym_id     Int
   name       String
-  email      String   @unique
-  phone      String
+  email      String?  @unique
+  phone      String   @unique
   password   String
   created_at DateTime @default(now())
   gym        Gym      @relation(fields: [gym_id], references: [id], onDelete: Cascade)

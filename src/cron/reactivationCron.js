@@ -94,11 +94,12 @@ async function runReactivationJob() {
  */
 function initReactivationCron() {
   // "0 10 * * 1" = minute 0, hour 10, any day-of-month, any month, Monday
-  cron.schedule('0 10 * * 1', runReactivationJob, {
+  const task = cron.schedule('0 10 * * 1', runReactivationJob, {
     timezone: 'Asia/Kolkata',
   });
 
   logger.info('[reactivationCron] Scheduled — every Monday at 10:00 IST');
+  return task;
 }
 
 module.exports = { initReactivationCron, runReactivationJob };

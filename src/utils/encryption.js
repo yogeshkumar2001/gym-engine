@@ -19,6 +19,7 @@ const CREDENTIAL_FIELDS = [
   'razorpay_webhook_secret',
   'whatsapp_phone_number_id',
   'whatsapp_access_token',
+  'google_sheet_id',   // added — existing plaintext values are handled by decrypt()'s backward-compat check
 ];
 
 /**

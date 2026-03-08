@@ -37,6 +37,7 @@ const { initSummaryCron } = require('./src/cron/summaryCron');
 const { initCredentialHealthCron } = require('./src/cron/credentialHealthCron');
 const { initMemberSyncCron } = require('./src/cron/memberSyncCron');
 const { initReactivationCron } = require('./src/cron/reactivationCron');
+const { initSubscriptionWarnCron } = require('./src/cron/subscriptionWarnCron');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -110,6 +111,23 @@ app.use((err, req, res, next) => {
   });
 });
 
+// ─── Process-level error handlers ────────────────────────────────────────────
+// Without these, Node.js v15+ terminates on any unhandled rejection.
+process.on('unhandledRejection', (err) => {
+  logger.error('Unhandled promise rejection', {
+    message: err?.message,
+    stack: err?.stack,
+  });
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception — process will exit', {
+    message: err.message,
+    stack: err.stack,
+  });
+  process.exit(1);
+});
+
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 async function start() {
   try {
@@ -121,14 +139,19 @@ async function start() {
     });
 
     // ─── Cron Jobs ─────────────────────────────────────────────────────────────
-    initExpiryCron();           // 09:00 IST — detect expiring members, create/send renewals
-    initSummaryCron();          // 20:00 IST — daily stats WhatsApp to gym owner
-    initCredentialHealthCron(); // 00:30 IST — validate Razorpay / WhatsApp / Google Sheet creds
-    initMemberSyncCron();       // 02:00 IST — sync members from Google Sheet
-    initReactivationCron();     // 10:00 IST Monday — win-back campaigns for churned members
+    // Collect task handles so shutdown can stop them before draining connections.
+    const cronTasks = [
+      initSubscriptionWarnCron(), // 08:00 IST — warn gyms whose subscription expires within 7 days
+      initExpiryCron(),           // 09:00 IST — detect expiring members, create/send renewals
+      initSummaryCron(),          // 20:00 IST — daily stats WhatsApp to gym owner
+      initCredentialHealthCron(), // 00:30 IST — validate Razorpay / WhatsApp / Google Sheet creds
+      initMemberSyncCron(),       // 02:00 IST — sync members from Google Sheet
+      initReactivationCron(),     // 10:00 IST Monday — win-back campaigns for churned members
+    ];
 
     const shutdown = async (signal) => {
       logger.info(`${signal} received. Shutting down gracefully...`);
+      cronTasks.forEach((t) => t.stop()); // prevent new cron ticks during drain
       server.close(async () => {
         await prisma.$disconnect();
         logger.info('Database disconnected. Server closed.');

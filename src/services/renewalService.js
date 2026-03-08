@@ -25,28 +25,43 @@ const ACTIVE_STATUSES = ['pending', 'processing_link', 'link_generated', 'dead']
  * @returns {{ created: boolean, renewal: object }}
  */
 async function createRenewalIfNotExists(gymId, member) {
-  const existing = await prisma.renewal.findFirst({
-    where: {
-      member_id: member.id,
-      status: { in: IN_PROGRESS_STATUSES },
-    },
-  });
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // Serializable isolation prevents phantom reads: exactly one concurrent
+      // caller will see no existing row and succeed in creating the renewal.
+      // The other will either see the newly-created row or receive P2034.
+      const existing = await tx.renewal.findFirst({
+        where: { member_id: member.id, status: { in: IN_PROGRESS_STATUSES } },
+      });
 
-  if (existing) {
-    return { created: false, renewal: existing };
+      if (existing) return { created: false, renewal: existing };
+
+      const renewal = await tx.renewal.create({
+        data: {
+          gym_id:             gymId,
+          member_id:          member.id,
+          amount:             member.plan_amount,
+          plan_duration_days: member.plan_duration_days ?? 30,
+          status:             'pending',
+        },
+      });
+
+      return { created: true, renewal };
+    }, { isolationLevel: 'Serializable' });
+  } catch (err) {
+    // P2034 = serialization failure — a concurrent transaction already created
+    // the renewal.  Retry once outside the transaction to return the existing row.
+    if (err.code === 'P2034') {
+      logger.debug('[createRenewalIfNotExists] Serialization conflict — fetching existing renewal', {
+        member_id: member.id,
+      });
+      const existing = await prisma.renewal.findFirst({
+        where: { member_id: member.id, status: { in: IN_PROGRESS_STATUSES } },
+      });
+      if (existing) return { created: false, renewal: existing };
+    }
+    throw err;
   }
-
-  const renewal = await prisma.renewal.create({
-    data: {
-      gym_id:            gymId,
-      member_id:         member.id,
-      amount:            member.plan_amount,
-      plan_duration_days: member.plan_duration_days ?? 30,
-      status:            'pending',
-    },
-  });
-
-  return { created: true, renewal };
 }
 
 /**
@@ -74,6 +89,7 @@ async function getPendingRenewalsByGym(gymId) {
       },
     },
     orderBy: { created_at: 'desc' },
+    take: 500,
   });
 }
 
@@ -276,19 +292,28 @@ async function settleRenewal(renewalId, memberId, currentExpiry, planDurationDay
   const newExpiry = new Date(currentExpiry);
   newExpiry.setUTCDate(newExpiry.getUTCDate() + days);
 
-  await prisma.$transaction([
-    prisma.renewal.update({
-      where: { id: renewalId },
+  await prisma.$transaction(async (tx) => {
+    // Atomic claim: only the first concurrent caller gets count=1.
+    // If count=0 the renewal was already settled — return without
+    // touching the member record (idempotent, no double-extension).
+    const claim = await tx.renewal.updateMany({
+      where: { id: renewalId, status: { not: 'paid' } },
       data: { status: 'paid' },
-    }),
-    prisma.member.update({
+    });
+
+    if (claim.count === 0) {
+      logger.info('[settleRenewal] Renewal already settled — skipping member update', { renewal_id: renewalId });
+      return;
+    }
+
+    await tx.member.update({
       where: { id: memberId },
       data: {
         expiry_date: newExpiry,
         status: 'active',
       },
-    }),
-  ]);
+    });
+  });
 }
 
 // ─── Recovery Engine ──────────────────────────────────────────────────────────
@@ -323,8 +348,10 @@ async function advanceRecoveryStep(renewalId, fromStep, toStep) {
  * @param {number} discountedAmount
  */
 async function applyDiscountToRenewal(renewalId, paymentLinkId, shortUrl, discountPercent, discountedAmount) {
-  await prisma.renewal.update({
-    where: { id: renewalId },
+  // Guard: only apply discount if none has been applied yet (discount_percent IS NULL).
+  // Prevents double-discounting if this function is somehow called twice for the same renewal.
+  const result = await prisma.renewal.updateMany({
+    where: { id: renewalId, discount_percent: null },
     data: {
       razorpay_payment_link_id: paymentLinkId,
       razorpay_short_url: shortUrl,
@@ -333,6 +360,9 @@ async function applyDiscountToRenewal(renewalId, paymentLinkId, shortUrl, discou
       amount: discountedAmount,
     },
   });
+  if (result.count === 0) {
+    logger.warn('[applyDiscountToRenewal] Discount already applied — skipping', { renewal_id: renewalId });
+  }
 }
 
 /**

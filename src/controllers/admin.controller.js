@@ -146,6 +146,19 @@ async function getLeadStatsHandler(req, res, next) {
   }
 }
 
+/**
+ * GET /admin/gyms
+ * Lists all gyms with summary fields for the admin portal.
+ */
+async function listGyms(_req, res, next) {
+  try {
+    const gyms = await adminService.listGyms();
+    return sendSuccess(res, { gyms, total: gyms.length }, 'Gyms retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   globalHealth,
   gymDeepHealth,
@@ -153,4 +166,5 @@ module.exports = {
   getRecoveryStats,
   getReactivationStats: getReactivationStatsHandler,
   getLeadStats: getLeadStatsHandler,
+  listGyms,
 };

@@ -1,7 +1,10 @@
 'use strict';
 
 const healthService = require('../services/health.service');
-const { sendSuccess } = require('../utils/response');
+const { syncGymMembers } = require('../services/sync.service');
+const { updateCredentials } = require('../services/onboarding.service');
+const { sendSuccess, sendError } = require('../utils/response');
+const logger = require('../config/logger');
 
 async function getHealth(req, res, next) {
   try {
@@ -12,4 +15,42 @@ async function getHealth(req, res, next) {
   }
 }
 
-module.exports = { getHealth };
+async function triggerSync(req, res) {
+  const gymId = req.gymOwner.gym_id;
+  // Return immediately — sync can take 30-60s for large sheets and would
+  // exceed the client's 15s axios timeout if awaited synchronously.
+  res.status(202).json({ success: true, message: 'Sync started. Check the dashboard for the updated last-synced time.' });
+
+  setImmediate(async () => {
+    try {
+      await syncGymMembers(gymId);
+    } catch (err) {
+      logger.error('[triggerSync] Background sync failed', { gym_id: gymId, message: err.message });
+    }
+  });
+}
+
+async function patchCredentials(req, res, next) {
+  const allowed = [
+    'razorpay_key_id', 'razorpay_key_secret', 'razorpay_webhook_secret',
+    'whatsapp_phone_number_id', 'whatsapp_access_token', 'google_sheet_id',
+  ];
+  const fields = {};
+  for (const key of allowed) {
+    if (req.body[key] && typeof req.body[key] === 'string' && req.body[key].trim()) {
+      fields[key] = req.body[key].trim();
+    }
+  }
+  if (Object.keys(fields).length === 0) {
+    return sendError(res, 'No credential fields provided.', 400);
+  }
+  try {
+    const result = await updateCredentials(req.gymOwner.gym_id, fields);
+    return sendSuccess(res, result, 'Credentials updated.');
+  } catch (err) {
+    if (err.status === 400) return sendError(res, err.message, 400);
+    next(err);
+  }
+}
+
+module.exports = { getHealth, triggerSync, patchCredentials };

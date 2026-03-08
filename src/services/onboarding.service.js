@@ -4,6 +4,8 @@ const axios = require('axios');
 const prisma = require('../lib/prisma');
 const { encrypt } = require('../utils/encryption');
 const { getSheetRows } = require('./googleSheetService');
+const { syncGymMembers } = require('./sync.service');
+const logger = require('../config/logger');
 
 async function submitCredentials({
   gym_id,
@@ -93,7 +95,7 @@ async function submitCredentials({
       razorpay_webhook_secret: encrypt(razorpay_webhook_secret),
       whatsapp_phone_number_id: encrypt(whatsapp_phone_number_id),
       whatsapp_access_token: encrypt(whatsapp_access_token),
-      google_sheet_id, // stored plaintext
+      google_sheet_id: encrypt(google_sheet_id),
       status: 'active',
       onboarding_token: null,
       last_health_check_at: new Date(),
@@ -101,7 +103,42 @@ async function submitCredentials({
     },
   });
 
+  // 6. Kick off initial member sync in background (non-blocking)
+  setImmediate(() => {
+    syncGymMembers(gym_id).catch((err) =>
+      logger.error({ err, gym_id }, 'Initial member sync failed after onboarding')
+    );
+  });
+
   return { success: true };
 }
 
-module.exports = { submitCredentials };
+// Partial credential update — only updates fields that are provided.
+async function updateCredentials(gymId, fields) {
+  const updateData = {};
+  if (fields.razorpay_key_id)          updateData.razorpay_key_id          = encrypt(fields.razorpay_key_id);
+  if (fields.razorpay_key_secret)      updateData.razorpay_key_secret      = encrypt(fields.razorpay_key_secret);
+  if (fields.razorpay_webhook_secret)  updateData.razorpay_webhook_secret  = encrypt(fields.razorpay_webhook_secret);
+  if (fields.whatsapp_phone_number_id) updateData.whatsapp_phone_number_id = encrypt(fields.whatsapp_phone_number_id);
+  if (fields.whatsapp_access_token)    updateData.whatsapp_access_token    = encrypt(fields.whatsapp_access_token);
+  if (fields.google_sheet_id)          updateData.google_sheet_id          = encrypt(fields.google_sheet_id);
+
+  if (Object.keys(updateData).length === 0) {
+    const err = new Error('No credential fields provided.');
+    err.status = 400;
+    throw err;
+  }
+
+  // Reset validity flags for updated integrations so the cron re-validates them
+  if (updateData.razorpay_key_id || updateData.razorpay_key_secret)
+    updateData.razorpay_valid = null;
+  if (updateData.whatsapp_phone_number_id || updateData.whatsapp_access_token)
+    updateData.whatsapp_valid = null;
+  if (updateData.google_sheet_id)
+    updateData.sheet_valid = null;
+
+  await prisma.gym.update({ where: { id: gymId }, data: updateData });
+  return { updated: Object.keys(fields).filter((k) => fields[k]) };
+}
+
+module.exports = { submitCredentials, updateCredentials };

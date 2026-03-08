@@ -233,11 +233,12 @@ async function runCredentialHealthCheck() {
 // ─── Scheduler ────────────────────────────────────────────────────────────────
 
 function initCredentialHealthCron() {
-  cron.schedule('30 0 * * *', runCredentialHealthCheck, {
+  const task = cron.schedule('30 0 * * *', runCredentialHealthCheck, {
     timezone: 'Asia/Kolkata',
   });
 
   logger.info('[credentialHealthCron] Scheduled — daily at 00:30 IST.');
+  return task;
 }
 
 module.exports = {

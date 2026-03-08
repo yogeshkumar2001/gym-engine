@@ -392,4 +392,29 @@ async function getRecoveryStats(gymId) {
   };
 }
 
-module.exports = { detectStuckRenewals, getGlobalHealth, getGymDeepHealth, updateGymSubscription, getRecoveryStats };
+/**
+ * Lists all gyms with lightweight summary fields.
+ * Used by the admin portal gym list page.
+ *
+ * @returns {Promise<Array>}
+ */
+async function listGyms() {
+  return prisma.gym.findMany({
+    select: {
+      id:                     true,
+      name:                   true,
+      status:                 true,
+      owner_phone:            true,
+      subscription_expires_at: true,
+      last_health_check_at:   true,
+      last_error_message:     true,
+      razorpay_valid:         true,
+      whatsapp_valid:         true,
+      sheet_valid:            true,
+      created_at:             true,
+    },
+    orderBy: { id: 'asc' },
+  });
+}
+
+module.exports = { detectStuckRenewals, getGlobalHealth, getGymDeepHealth, updateGymSubscription, getRecoveryStats, listGyms };

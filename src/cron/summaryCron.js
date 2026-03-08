@@ -135,11 +135,12 @@ async function sendDailySummaries() {
 }
 
 function initSummaryCron() {
-  cron.schedule('0 20 * * *', sendDailySummaries, {
+  const task = cron.schedule('0 20 * * *', sendDailySummaries, {
     timezone: 'Asia/Kolkata',
   });
 
   logger.info('[summaryCron] Scheduled — daily at 20:00 IST.');
+  return task;
 }
 
 module.exports = { initSummaryCron, sendDailySummaries };

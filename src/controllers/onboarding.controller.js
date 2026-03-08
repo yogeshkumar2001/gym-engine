@@ -5,7 +5,7 @@ const onboardingService = require('../services/onboarding.service');
 const { sendSuccess, sendError } = require('../utils/response');
 
 async function submitGymCredentials(req, res, next) {
-  const { error, value } = submitCredentialsSchema.validate(req.body, { abortEarly: false });
+  const { error, value } = submitCredentialsSchema.validate(req.body, { abortEarly: false, allowUnknown: true });
   if (error) {
     return sendError(res, 'Validation failed.', 400, error.details.map(d => d.message));
   }

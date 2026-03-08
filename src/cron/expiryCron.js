@@ -384,81 +384,112 @@ async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHours
   );
 }
 
+// Module-level lock — prevents concurrent runs if a cron tick fires while the
+// previous run is still executing (e.g. many gyms, slow APIs).
+let _isRunning = false;
+
 /**
  * Main cron handler.
  * Computes the detection window once (consistent across all gyms in this run),
  * then processes each gym independently.
  */
 async function detectExpiringMembers() {
-  const now = new Date();
-  logger.info(`[expiryCron] Run started at ${now.toISOString()}`);
-
-  const { startOfTargetDay, endOfTargetDay } = getTargetDayWindow(3);
-  const fortyEightHoursAgo = getFortyEightHoursAgo();
-
-  logger.debug('[expiryCron] Detection window', {
-    startOfTargetDay: startOfTargetDay.toISOString(),
-    endOfTargetDay: endOfTargetDay.toISOString(),
-    fortyEightHoursAgo: fortyEightHoursAgo.toISOString(),
-  });
-
-  let gyms;
+  if (_isRunning) {
+    logger.warn('[expiryCron] Previous run still active — skipping this tick.');
+    return;
+  }
+  _isRunning = true;
   try {
-    gyms = await prisma.gym.findMany({
-      where: {
-        status: 'active',
-        // Subscription gate: include gyms with no expiry (unlimited/grandfathered)
-        // or those whose subscription has not yet lapsed.
-        OR: [
-          { subscription_expires_at: null },
-          { subscription_expires_at: { gt: now } },
-        ],
-      },
-      select: {
-        id: true,
-        name: true,
-        razorpay_key_id: true,
-        razorpay_key_secret: true,
-        whatsapp_phone_number_id: true,
-        whatsapp_access_token: true,
-      },
-    });
-    gyms = gyms.map(g => decryptGymCredentials(g));
-  } catch (err) {
-    logger.error('[expiryCron] Failed to fetch gyms. Aborting run.', {
-      message: err.message,
-      stack: err.stack,
-    });
-    return;
-  }
+    const now = new Date();
+    logger.info(`[expiryCron] Run started at ${now.toISOString()}`);
 
-  if (gyms.length === 0) {
-    logger.info('[expiryCron] No gyms found. Exiting.');
-    return;
-  }
-
-  logger.info(`[expiryCron] Processing ${gyms.length} gym(s).`);
-
-  for (const gym of gyms) {
+    // ── Stuck renewal cleanup ──────────────────────────────────────────────
+    // Renewals in 'processing_link' for > 1 hour mean the process crashed after
+    // acquiring the lock but before Razorpay responded. Reset to 'pending' so
+    // this run can pick them up and retry.
     try {
-      await processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHoursAgo, now);
+      const stuckCutoff = new Date(now.getTime() - 60 * 60 * 1000);
+      const stuckResult = await prisma.renewal.updateMany({
+        where: { status: 'processing_link', updated_at: { lt: stuckCutoff } },
+        data: { status: 'pending' },
+      });
+      if (stuckResult.count > 0) {
+        logger.warn(`[expiryCron] Reset ${stuckResult.count} stuck processing_link renewal(s) to pending.`);
+      }
     } catch (err) {
-      logger.error(`[expiryCron] Error processing gym_id=${gym.id} "${gym.name}". Skipping.`, {
+      logger.error('[expiryCron] Failed to clean up stuck renewals.', { message: err.message });
+    }
+
+    const { startOfTargetDay, endOfTargetDay } = getTargetDayWindow(3);
+    const fortyEightHoursAgo = getFortyEightHoursAgo();
+
+    logger.debug('[expiryCron] Detection window', {
+      startOfTargetDay: startOfTargetDay.toISOString(),
+      endOfTargetDay: endOfTargetDay.toISOString(),
+      fortyEightHoursAgo: fortyEightHoursAgo.toISOString(),
+    });
+
+    let gyms;
+    try {
+      gyms = await prisma.gym.findMany({
+        where: {
+          status: 'active',
+          // Subscription gate: include gyms with no expiry (unlimited/grandfathered)
+          // or those whose subscription has not yet lapsed.
+          OR: [
+            { subscription_expires_at: null },
+            { subscription_expires_at: { gt: now } },
+          ],
+        },
+        select: {
+          id: true,
+          name: true,
+          razorpay_key_id: true,
+          razorpay_key_secret: true,
+          whatsapp_phone_number_id: true,
+          whatsapp_access_token: true,
+        },
+      });
+      gyms = gyms.map(g => decryptGymCredentials(g));
+    } catch (err) {
+      logger.error('[expiryCron] Failed to fetch gyms. Aborting run.', {
         message: err.message,
         stack: err.stack,
       });
+      return;
     }
-  }
 
-  logger.info('[expiryCron] Run complete.');
+    if (gyms.length === 0) {
+      logger.info('[expiryCron] No gyms found. Exiting.');
+      return;
+    }
+
+    logger.info(`[expiryCron] Processing ${gyms.length} gym(s).`);
+
+    for (const gym of gyms) {
+      try {
+        await processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHoursAgo, now);
+      } catch (err) {
+        logger.error(`[expiryCron] Error processing gym_id=${gym.id} "${gym.name}". Skipping.`, {
+          message: err.message,
+          stack: err.stack,
+        });
+      }
+    }
+
+    logger.info('[expiryCron] Run complete.');
+  } finally {
+    _isRunning = false;
+  }
 }
 
 function initExpiryCron() {
-  cron.schedule('0 9 * * *', detectExpiringMembers, {
+  const task = cron.schedule('0 9 * * *', detectExpiringMembers, {
     timezone: 'Asia/Kolkata',
   });
 
   logger.info('[expiryCron] Scheduled — daily at 09:00 IST.');
+  return task;
 }
 
 module.exports = { initExpiryCron, detectExpiringMembers };
