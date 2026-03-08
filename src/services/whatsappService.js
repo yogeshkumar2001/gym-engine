@@ -361,6 +361,117 @@ async function sendFinalNotice(gym, renewal, member) {
   return { messageId };
 }
 
+// ─── Reactivation + Lead Templates ───────────────────────────────────────────
+
+/**
+ * Sends a win-back offer to a churned member.
+ * Template: "member_reactivation"
+ * Parameters: {{1}} member.name, {{2}} discountPercent (e.g. "10"), {{3}} gym.name
+ */
+async function sendReactivationOffer(gym, member, discountPercent) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${gym.whatsapp_phone_number_id}/messages`;
+  const response = await axios.post(url, {
+    messaging_product: 'whatsapp',
+    to: member.phone,
+    type: 'template',
+    template: {
+      name: 'member_reactivation',
+      language: { code: 'en' },
+      components: [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: member.name },
+          { type: 'text', text: String(discountPercent) },
+          { type: 'text', text: gym.name },
+        ],
+      }],
+    },
+  }, {
+    headers: {
+      Authorization: `Bearer ${gym.whatsapp_access_token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const messageId = response.data?.messages?.[0]?.id ?? null;
+  logger.info('[whatsappService] Reactivation offer sent', {
+    gym_id: gym.id, member_id: member.id, discount_percent: discountPercent, whatsapp_message_id: messageId,
+  });
+  return { messageId };
+}
+
+/**
+ * Sends a trial welcome message to a new trial lead.
+ * Template: "trial_welcome"
+ * Parameters: {{1}} member.name, {{2}} gym.name
+ */
+async function sendTrialWelcome(gym, member) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${gym.whatsapp_phone_number_id}/messages`;
+  const response = await axios.post(url, {
+    messaging_product: 'whatsapp',
+    to: member.phone,
+    type: 'template',
+    template: {
+      name: 'trial_welcome',
+      language: { code: 'en' },
+      components: [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: member.name },
+          { type: 'text', text: gym.name },
+        ],
+      }],
+    },
+  }, {
+    headers: {
+      Authorization: `Bearer ${gym.whatsapp_access_token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const messageId = response.data?.messages?.[0]?.id ?? null;
+  logger.info('[whatsappService] Trial welcome sent', {
+    gym_id: gym.id, member_name: member.name, whatsapp_message_id: messageId,
+  });
+  return { messageId };
+}
+
+/**
+ * Sends a trial follow-up message (nudge to convert).
+ * Template: "trial_followup"
+ * Parameters: {{1}} member.name, {{2}} gym.name
+ */
+async function sendTrialFollowup(gym, member) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${gym.whatsapp_phone_number_id}/messages`;
+  const response = await axios.post(url, {
+    messaging_product: 'whatsapp',
+    to: member.phone,
+    type: 'template',
+    template: {
+      name: 'trial_followup',
+      language: { code: 'en' },
+      components: [{
+        type: 'body',
+        parameters: [
+          { type: 'text', text: member.name },
+          { type: 'text', text: gym.name },
+        ],
+      }],
+    },
+  }, {
+    headers: {
+      Authorization: `Bearer ${gym.whatsapp_access_token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const messageId = response.data?.messages?.[0]?.id ?? null;
+  logger.info('[whatsappService] Trial follow-up sent', {
+    gym_id: gym.id, member_name: member.name, whatsapp_message_id: messageId,
+  });
+  return { messageId };
+}
+
 module.exports = {
   sendRenewalReminder,
   sendDailySummary,
@@ -368,4 +479,7 @@ module.exports = {
   sendRecoveryFollowup,
   sendDiscountOffer,
   sendFinalNotice,
+  sendReactivationOffer,
+  sendTrialWelcome,
+  sendTrialFollowup,
 };

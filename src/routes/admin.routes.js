@@ -23,4 +23,8 @@ router.get('/gym/:gymId/plan-report', analyticsController.planReport);
 // Recovery Engine
 router.get('/gym/:gymId/recovery-stats', adminController.getRecoveryStats);
 
+// Reactivation + Lead Funnel
+router.get('/gym/:gymId/reactivation-stats', adminController.getReactivationStats);
+router.get('/gym/:gymId/lead-stats', adminController.getLeadStats);
+
 module.exports = router;

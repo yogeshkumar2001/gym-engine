@@ -31,24 +31,30 @@ model Gym {
   members                  Member[]
   payments                 Payment[]
   renewals                 Renewal[]
+  reactivation_campaigns   ReactivationCampaign[]
+  leads                    Lead[]
 }
 
 model Member {
-  id                    Int       @id @default(autoincrement())
-  gym_id                Int
-  name                  String
-  phone                 String
-  plan_name             String
-  plan_amount           Float
-  join_date             DateTime
-  expiry_date           DateTime
-  status                String    @default("active")
-  last_reminder_sent_at DateTime?
-  created_at            DateTime  @default(now())
-  plan_duration_days    Int       @default(30)
-  gym                   Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
-  payments              Payment[]
-  renewals              Renewal[]
+  id                          Int                      @id @default(autoincrement())
+  gym_id                      Int
+  name                        String
+  phone                       String
+  plan_name                   String
+  plan_amount                 Float
+  join_date                   DateTime
+  expiry_date                 DateTime
+  status                      String                   @default("active")
+  last_reminder_sent_at       DateTime?
+  created_at                  DateTime                 @default(now())
+  plan_duration_days          Int                      @default(30)
+  churned_at                  DateTime?
+  reactivation_sent_at        DateTime?
+  reactivation_offer_percent  Float?
+  gym                         Gym                      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  payments                    Payment[]
+  renewals                    Renewal[]
+  reactivation_campaigns      ReactivationCampaign[]
 
   @@unique([gym_id, phone])
 }
@@ -106,4 +112,39 @@ model GymOwner {
   gym        Gym      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
 
   @@index([gym_id], map: "GymOwner_gym_id_fkey")
+}
+
+model ReactivationCampaign {
+  id               Int       @id @default(autoincrement())
+  gym_id           Int
+  member_id        Int
+  discount_percent Float
+  offer_expiry     DateTime
+  status           String    @default("sent") // sent | converted | expired
+  sent_at          DateTime  @default(now())
+  converted_at     DateTime?
+  gym              Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  member           Member    @relation(fields: [member_id], references: [id], onDelete: Cascade)
+
+  @@index([gym_id])
+  @@index([member_id])
+}
+
+model Lead {
+  id           Int       @id @default(autoincrement())
+  gym_id       Int
+  name         String
+  phone        String
+  source       String?   // walk_in | referral | instagram | google
+  stage        String    @default("walk_in") // walk_in | trial | converted | lost
+  trial_start  DateTime?
+  trial_end    DateTime?
+  converted_at DateTime?
+  lost_reason  String?
+  created_at   DateTime  @default(now())
+  updated_at   DateTime  @updatedAt
+  gym          Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+
+  @@unique([gym_id, phone])
+  @@index([gym_id])
 }

@@ -1,6 +1,8 @@
 'use strict';
 
 const adminService = require('../services/admin.service');
+const { getReactivationStats } = require('../services/reactivationService');
+const { getFunnelStats } = require('../services/leadService');
 const { sendSuccess, sendError } = require('../utils/response');
 
 /**
@@ -112,4 +114,43 @@ async function getRecoveryStats(req, res, next) {
   }
 }
 
-module.exports = { globalHealth, gymDeepHealth, updateGymSubscription, getRecoveryStats };
+/**
+ * GET /admin/gym/:gymId/reactivation-stats
+ * Returns reactivation campaign metrics for a gym.
+ */
+async function getReactivationStatsHandler(req, res, next) {
+  const gymId = parseGymId(req);
+  if (!gymId) return sendError(res, 'Invalid gymId.', 400);
+
+  try {
+    const data = await getReactivationStats(gymId);
+    return sendSuccess(res, data, 'Reactivation stats retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /admin/gym/:gymId/lead-stats
+ * Returns lead funnel statistics for a gym.
+ */
+async function getLeadStatsHandler(req, res, next) {
+  const gymId = parseGymId(req);
+  if (!gymId) return sendError(res, 'Invalid gymId.', 400);
+
+  try {
+    const data = await getFunnelStats(gymId);
+    return sendSuccess(res, data, 'Lead stats retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = {
+  globalHealth,
+  gymDeepHealth,
+  updateGymSubscription,
+  getRecoveryStats,
+  getReactivationStats: getReactivationStatsHandler,
+  getLeadStats: getLeadStatsHandler,
+};

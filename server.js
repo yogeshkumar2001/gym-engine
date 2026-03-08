@@ -36,6 +36,7 @@ const { initExpiryCron } = require('./src/cron/expiryCron');
 const { initSummaryCron } = require('./src/cron/summaryCron');
 const { initCredentialHealthCron } = require('./src/cron/credentialHealthCron');
 const { initMemberSyncCron } = require('./src/cron/memberSyncCron');
+const { initReactivationCron } = require('./src/cron/reactivationCron');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -124,6 +125,7 @@ async function start() {
     initSummaryCron();          // 20:00 IST — daily stats WhatsApp to gym owner
     initCredentialHealthCron(); // 00:30 IST — validate Razorpay / WhatsApp / Google Sheet creds
     initMemberSyncCron();       // 02:00 IST — sync members from Google Sheet
+    initReactivationCron();     // 10:00 IST Monday — win-back campaigns for churned members
 
     const shutdown = async (signal) => {
       logger.info(`${signal} received. Shutting down gracefully...`);
