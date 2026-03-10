@@ -66,7 +66,7 @@ Edit `.env` with your actual values:
 
 ```env
 DATABASE_URL="mysql://root:your_password@localhost:3306/gym_renewal"
-PORT=5000
+PORT=4000
 NODE_ENV=development
 INTERNAL_SECRET=your_secret_here
 ```
@@ -109,7 +109,7 @@ npm run dev
 npm start
 ```
 
-Server starts on `http://localhost:5000` by default.
+Server starts on `http://localhost:4000` by default.
 
 ---
 
@@ -126,7 +126,7 @@ All responses follow the shape:
 Check server status.
 
 ```bash
-curl http://localhost:5000/health
+curl http://localhost:4000/health
 ```
 
 **Response 200:**
@@ -146,7 +146,7 @@ curl http://localhost:5000/health
 Register a new gym.
 
 ```bash
-curl -X POST http://localhost:5000/gym \
+curl -X POST http://localhost:4000/gym \
   -H "Content-Type: application/json" \
   -d '{
     "name": "FitZone Gym",
@@ -190,7 +190,7 @@ curl -X POST http://localhost:5000/gym \
 Fetch gym details by ID. Sensitive fields (`razorpay_key_secret`, `whatsapp_access_token`) are excluded.
 
 ```bash
-curl http://localhost:5000/gym/1
+curl http://localhost:4000/gym/1
 ```
 
 **Response 200:**

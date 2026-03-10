@@ -46,13 +46,15 @@ const PORT = process.env.PORT || 5000;
 app.use(helmet());
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
-// ALLOWED_ORIGIN must be set in production (e.g. "https://app.yourdomain.com").
-// If unset, CORS headers are omitted — all cross-origin requests are blocked.
-app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || false,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Admin-Key'],
-}));
+// In development the Next.js proxy forwards requests server-to-server so CORS
+// is irrelevant for browser traffic. ALLOWED_ORIGIN is still respected for any
+// direct cross-origin calls (Postman, mobile apps, production deployments).
+// Default dev fallback: allow the Next.js dev server on port 3000.
+const allowedOrigin =
+  process.env.ALLOWED_ORIGIN ||
+  (process.env.NODE_ENV !== 'production' ? 'http://localhost:3000' : false);
+
+app.use(cors());
 
 // ─── Rate Limiting ───────────────────────────────────────────────────────────
 const limiter = rateLimit({

@@ -36,6 +36,22 @@ model Gym {
   renewals                 Renewal[]
   reactivation_campaigns   ReactivationCampaign[]
   leads                    Lead[]
+  plans                    Plan[]
+}
+
+model Plan {
+  id            Int      @id @default(autoincrement())
+  gym_id        Int
+  name          String
+  duration_days Int
+  price         Float
+  status        String   @default("active") // active | inactive
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+  gym           Gym      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+
+  @@unique([gym_id, name])
+  @@index([gym_id])
 }
 
 model Member {
@@ -52,6 +68,7 @@ model Member {
   created_at                  DateTime                 @default(now())
   plan_duration_days          Int                      @default(30)
   churned_at                  DateTime?
+  deleted_at                  DateTime?
   reactivation_sent_at        DateTime?
   reactivation_offer_percent  Float?
   gym                         Gym                      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
