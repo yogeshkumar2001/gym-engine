@@ -27,13 +27,15 @@
     "joi": "^18.0.2",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.1",
+    "multer": "^2.1.1",
     "ngrok": "^5.0.0-beta.2",
     "node-cron": "^4.2.1",
     "pdfkit": "^0.17.2",
     "prisma": "^7.4.1",
     "razorpay": "^2.9.6",
     "uuid": "^13.0.0",
-    "winston": "^3.19.0"
+    "winston": "^3.19.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

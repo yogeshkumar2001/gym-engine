@@ -1,14 +1,18 @@
 'use strict';
 
 const { Router } = require('express');
+const multer = require('multer');
 const verifyJWT = require('../middleware/verifyJWT');
 const ownerController = require('../controllers/owner.controller');
 const analyticsController = require('../controllers/analytics.controller');
 const leadController = require('../controllers/lead.controller');
 const memberController = require('../controllers/member.controller');
+const importController = require('../controllers/import.controller');
 const planController = require('../controllers/plan.controller');
 const renewalController = require('../controllers/renewal.controller');
 const invoiceController = require('../controllers/invoice.controller');
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const router = Router();
 
@@ -21,14 +25,17 @@ router.patch('/credentials', ownerController.patchCredentials);
 // Members — specific routes MUST come before /:memberId param route
 router.get('/members/summary',  memberController.getMemberSummary);
 router.get('/members/at-risk',  memberController.getAtRiskMembers);
+router.post('/members/import',      upload.single('file'), importController.importMembers);
+router.post('/members/import/bulk', importController.bulkImportMembers);
 router.get('/members',          memberController.listMembers);
 router.post('/members',         memberController.createMember);
 router.patch('/members/:memberId', memberController.updateMember);
 router.delete('/members/:memberId', memberController.deleteMember);
 router.get('/members/:memberId', memberController.getMember);
 
-// Plans — summary before /:planId
+// Plans — specific routes MUST come before /:planId param route
 router.get('/plans/summary',    planController.getPlanSummary);
+router.post('/plans/seed',      planController.seedPlansFromMembers);
 router.get('/plans',            planController.listPlans);
 router.post('/plans',           planController.createPlan);
 router.patch('/plans/:planId',  planController.updatePlan);

@@ -182,4 +182,63 @@ async function deletePlan(req, res, next) {
   }
 }
 
-module.exports = { listPlans, getPlanSummary, createPlan, updatePlan, deletePlan };
+/**
+ * POST /owner/plans/seed
+ * Derive unique plans from existing Member records and insert missing ones.
+ * Uses plan_name + plan_amount + plan_duration_days from member rows.
+ * Skips plan names that already exist in the Plan table.
+ */
+async function seedPlansFromMembers(req, res, next) {
+  const gymId = req.gymOwner.gym_id;
+
+  try {
+    // Distinct plan_name rows (takes first encountered amount + duration per name)
+    const memberPlans = await prisma.member.findMany({
+      where:    { gym_id: gymId, deleted_at: null },
+      select:   { plan_name: true, plan_amount: true, plan_duration_days: true },
+      distinct: ['plan_name'],
+    });
+
+    if (memberPlans.length === 0) {
+      return sendSuccess(res, { created: 0, skipped: 0 }, 'No member plan data found to seed.');
+    }
+
+    const existing = await prisma.plan.findMany({
+      where:  { gym_id: gymId },
+      select: { name: true },
+    });
+    const existingNames = new Set(existing.map((p) => p.name));
+
+    const toCreate = memberPlans.filter((mp) => mp.plan_name && !existingNames.has(mp.plan_name));
+
+    if (toCreate.length === 0) {
+      return sendSuccess(
+        res,
+        { created: 0, skipped: memberPlans.length },
+        'All member plans already exist in the Plan table.',
+      );
+    }
+
+    await prisma.plan.createMany({
+      data: toCreate.map((mp) => ({
+        gym_id:        gymId,
+        name:          mp.plan_name,
+        price:         mp.plan_amount ?? 0,
+        duration_days: mp.plan_duration_days ?? 30,
+        status:        'active',
+      })),
+      skipDuplicates: true,
+    });
+
+    logger.info('[plan] Seeded from members', { gym_id: gymId, created: toCreate.length });
+    return sendSuccess(
+      res,
+      { created: toCreate.length, skipped: memberPlans.length - toCreate.length },
+      `${toCreate.length} plan(s) seeded from member data.`,
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { listPlans, getPlanSummary, createPlan, updatePlan, deletePlan, seedPlansFromMembers };
