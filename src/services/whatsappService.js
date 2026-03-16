@@ -227,26 +227,28 @@ async function sendPaymentConfirmation(gym, member, renewal, newExpiry, invoiceP
     whatsapp_message_id: confirmResponse.data?.messages?.[0]?.id ?? null,
   });
 
-  // 2. Upload invoice PDF → get media_id → send as document
-  const mediaId = await uploadMedia(gym, invoicePath);
+  // 2. Upload invoice PDF → get media_id → send as document (only if PDF was generated)
+  if (invoicePath) {
+    const mediaId = await uploadMedia(gym, invoicePath);
 
-  await axios.post(url, {
-    messaging_product: 'whatsapp',
-    to: member.phone,
-    type: 'document',
-    document: {
-      id: mediaId,
-      filename: `invoice_${renewal.id}.pdf`,
-      caption: `Invoice — ${member.plan_name} plan | ${gym.name}`,
-    },
-  }, { headers });
+    await axios.post(url, {
+      messaging_product: 'whatsapp',
+      to: member.phone,
+      type: 'document',
+      document: {
+        id: mediaId,
+        filename: `invoice_${renewal.id}.pdf`,
+        caption: `Invoice — ${member.plan_name} plan | ${gym.name}`,
+      },
+    }, { headers });
 
-  logger.info('[whatsappService] Invoice document sent', {
-    gym_id: gym.id,
-    renewal_id: renewal.id,
-    member_id: member.id,
-    media_id: mediaId,
-  });
+    logger.info('[whatsappService] Invoice document sent', {
+      gym_id: gym.id,
+      renewal_id: renewal.id,
+      member_id: member.id,
+      media_id: mediaId,
+    });
+  }
 }
 
 // ─── Recovery Engine Templates ────────────────────────────────────────────────

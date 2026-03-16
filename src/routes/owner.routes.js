@@ -11,6 +11,7 @@ const importController = require('../controllers/import.controller');
 const planController = require('../controllers/plan.controller');
 const renewalController = require('../controllers/renewal.controller');
 const invoiceController = require('../controllers/invoice.controller');
+const manualPaymentController = require('../controllers/manualPayment.controller');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -21,6 +22,8 @@ router.use(verifyJWT);
 router.get('/health', ownerController.getHealth);
 router.post('/sync', ownerController.triggerSync);
 router.patch('/credentials', ownerController.patchCredentials);
+router.get('/services', ownerController.getServices);
+router.patch('/services', ownerController.updateServices);
 
 // Members — specific routes MUST come before /:memberId param route
 router.get('/members/summary',  memberController.getMemberSummary);
@@ -29,6 +32,8 @@ router.post('/members/import',      upload.single('file'), importController.impo
 router.post('/members/import/bulk', importController.bulkImportMembers);
 router.get('/members',          memberController.listMembers);
 router.post('/members',         memberController.createMember);
+router.post('/members/:memberId/mark-paid', manualPaymentController.markMemberPaid);
+router.patch('/members/:memberId/profile', memberController.updateMemberProfile);
 router.patch('/members/:memberId', memberController.updateMember);
 router.delete('/members/:memberId', memberController.deleteMember);
 router.get('/members/:memberId', memberController.getMember);

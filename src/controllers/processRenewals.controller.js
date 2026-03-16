@@ -6,6 +6,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { createPaymentLinkForRenewal } = require('../services/razorpayService');
 const { markLinkGenerated } = require('../services/renewalService');
 const { decryptGymCredentials } = require('../utils/encryption');
+const { gymHasService } = require('../utils/gymServices');
 
 async function processRenewals(req, res, next) {
   try {
@@ -23,11 +24,16 @@ async function processRenewals(req, res, next) {
         name: true,
         razorpay_key_id: true,
         razorpay_key_secret: true,
+        services: true,
       },
     });
 
     if (!gym) {
       return sendError(res, 'Gym not found.', 404);
+    }
+
+    if (!gymHasService(gym, 'payments')) {
+      return sendError(res, 'Payments service is disabled for this gym.', 403);
     }
 
     // Decrypt AES-256-GCM credentials before passing to Razorpay SDK.

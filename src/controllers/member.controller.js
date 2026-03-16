@@ -3,7 +3,7 @@
 const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 const { sendSuccess, sendError } = require('../utils/response');
-const { createMemberSchema, updateMemberSchema } = require('../utils/validators/member.validator');
+const { createMemberSchema, updateMemberSchema, updateProfileSchema } = require('../utils/validators/member.validator');
 
 function computeExpiry(joinDate, durationDays) {
   const d = new Date(joinDate);
@@ -257,6 +257,45 @@ async function deleteMember(req, res, next) {
   }
 }
 
+/**
+ * PATCH /owner/members/:memberId/profile
+ * Updates optional profile and identity verification fields only.
+ */
+async function updateMemberProfile(req, res, next) {
+  const gymId = req.gymOwner.gym_id;
+  const memberId = parseInt(req.params.memberId, 10);
+
+  if (!Number.isInteger(memberId) || memberId <= 0) {
+    return sendError(res, 'Invalid memberId.', 400);
+  }
+
+  const { error, value } = updateProfileSchema.validate(req.body, { abortEarly: false });
+  if (error) {
+    return sendError(res, 'Validation failed.', 400, error.details.map((d) => d.message));
+  }
+
+  try {
+    const existing = await prisma.member.findUnique({ where: { id: memberId } });
+    if (!existing || existing.gym_id !== gymId || existing.deleted_at !== null) {
+      return sendError(res, 'Member not found.', 404);
+    }
+
+    const member = await prisma.member.update({
+      where: { id: memberId },
+      data: value,
+      select: {
+        id: true, name: true, phone: true,
+        photo_url: true, id_proof_type: true, id_proof_number: true, id_proof_url: true,
+      },
+    });
+
+    logger.info('[member] Profile updated', { gym_id: gymId, member_id: memberId });
+    return sendSuccess(res, member, 'Profile updated.');
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   listMembers,
   getMemberSummary,
@@ -264,5 +303,6 @@ module.exports = {
   getMember,
   createMember,
   updateMember,
+  updateMemberProfile,
   deleteMember,
 };

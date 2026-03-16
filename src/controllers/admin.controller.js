@@ -4,6 +4,8 @@ const adminService = require('../services/admin.service');
 const { getReactivationStats } = require('../services/reactivationService');
 const { getFunnelStats } = require('../services/leadService');
 const { sendSuccess, sendError } = require('../utils/response');
+const prisma = require('../lib/prisma');
+const { DEFAULT_SERVICES, KNOWN_SERVICES } = require('../utils/gymServices');
 
 /**
  * Validates and parses gymId from req.params — shared by all admin handlers.
@@ -159,6 +161,76 @@ async function listGyms(_req, res, next) {
   }
 }
 
+/**
+ * GET /admin/gym/:gymId/services
+ * Returns the current service flags for a gym (merged with defaults for display).
+ */
+async function getGymServices(req, res, next) {
+  const gymId = parseGymId(req);
+  if (!gymId) return sendError(res, 'Invalid gymId.', 400);
+
+  try {
+    const gym = await prisma.gym.findUnique({
+      where: { id: gymId },
+      select: { id: true, services: true },
+    });
+    if (!gym) return sendError(res, 'Gym not found.', 404);
+
+    // Merge stored services with defaults so the response always contains all keys
+    const services = { ...DEFAULT_SERVICES, ...(gym.services || {}) };
+    return sendSuccess(res, { gym_id: gymId, services }, 'Services retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * PATCH /admin/gym/:gymId/services
+ * Enables or disables individual services for a gym.
+ *
+ * Body: partial object, e.g. { "payments": false, "whatsapp_reminders": true }
+ * Unknown keys are rejected. Existing keys not in the body are left unchanged.
+ */
+async function updateGymServices(req, res, next) {
+  const gymId = parseGymId(req);
+  if (!gymId) return sendError(res, 'Invalid gymId.', 400);
+
+  const updates = req.body;
+  if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+    return sendError(res, 'Request body must be a JSON object.', 400);
+  }
+
+  const unknownKeys = Object.keys(updates).filter(k => !KNOWN_SERVICES.includes(k));
+  if (unknownKeys.length > 0) {
+    return sendError(res, `Unknown service key(s): ${unknownKeys.join(', ')}. Allowed: ${KNOWN_SERVICES.join(', ')}.`, 400);
+  }
+
+  const invalidValues = Object.entries(updates).filter(([, v]) => typeof v !== 'boolean');
+  if (invalidValues.length > 0) {
+    return sendError(res, 'All service values must be boolean.', 400);
+  }
+
+  try {
+    const gym = await prisma.gym.findUnique({
+      where: { id: gymId },
+      select: { id: true, services: true },
+    });
+    if (!gym) return sendError(res, 'Gym not found.', 404);
+
+    // Merge: existing services → defaults → incoming updates
+    const merged = { ...DEFAULT_SERVICES, ...(gym.services || {}), ...updates };
+
+    await prisma.gym.update({
+      where: { id: gymId },
+      data: { services: merged },
+    });
+
+    return sendSuccess(res, { gym_id: gymId, services: merged }, 'Services updated.');
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   globalHealth,
   gymDeepHealth,
@@ -167,4 +239,6 @@ module.exports = {
   getReactivationStats: getReactivationStatsHandler,
   getLeadStats: getLeadStatsHandler,
   listGyms,
+  getGymServices,
+  updateGymServices,
 };

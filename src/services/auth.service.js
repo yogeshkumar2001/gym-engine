@@ -27,6 +27,14 @@ async function registerGym({ gym_name, owner_name, phone, pin }) {
         whatsapp_phone_number_id: 'PENDING',
         whatsapp_access_token: 'PENDING',
         google_sheet_id: 'PENDING',
+        services: {
+          payments:           true,
+          invoice:            true,
+          whatsapp_reminders: true,
+          whatsapp_summary:   true,
+          google_sheet_sync:  true,
+          offers:             false,
+        },
       },
     });
 

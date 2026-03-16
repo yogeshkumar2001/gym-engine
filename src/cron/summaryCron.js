@@ -6,6 +6,7 @@ const logger = require('../config/logger');
 const { getTargetDayWindow } = require('../utils/dateUtils');
 const { sendDailySummary } = require('../services/whatsappService');
 const { decryptGymCredentials } = require('../utils/encryption');
+const { gymHasService } = require('../utils/gymServices');
 
 /**
  * Computes today's stats for one gym and sends a WhatsApp daily summary
@@ -101,6 +102,7 @@ async function sendDailySummaries() {
         whatsapp_phone_number_id: true,
         whatsapp_access_token: true,
         owner_phone: true,
+        services: true,
       },
     });
     gyms = gyms.map(g => decryptGymCredentials(g));
@@ -120,6 +122,10 @@ async function sendDailySummaries() {
   logger.info(`[summaryCron] Processing ${gyms.length} gym(s).`);
 
   for (const gym of gyms) {
+    if (!gymHasService(gym, 'whatsapp_summary')) {
+      logger.info(`[summaryCron] gym_id=${gym.id} "${gym.name}": whatsapp_summary disabled — skipping.`);
+      continue;
+    }
     try {
       await processGymSummary(gym, startOfToday, endOfToday);
     } catch (err) {

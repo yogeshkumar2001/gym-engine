@@ -4,6 +4,8 @@ const healthService = require('../services/health.service');
 const { syncGymMembers } = require('../services/sync.service');
 const { updateCredentials } = require('../services/onboarding.service');
 const { sendSuccess, sendError } = require('../utils/response');
+const { DEFAULT_SERVICES, KNOWN_SERVICES } = require('../utils/gymServices');
+const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 
 async function getHealth(req, res, next) {
@@ -53,4 +55,53 @@ async function patchCredentials(req, res, next) {
   }
 }
 
-module.exports = { getHealth, triggerSync, patchCredentials };
+async function getServices(req, res, next) {
+  try {
+    const gym = await prisma.gym.findUnique({
+      where: { id: req.gymOwner.gym_id },
+      select: { services: true },
+    });
+    if (!gym) return sendError(res, 'Gym not found.', 404);
+    const merged = { ...DEFAULT_SERVICES, ...(gym.services || {}) };
+    return sendSuccess(res, merged, 'Services retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateServices(req, res, next) {
+  try {
+    const updates = req.body;
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+      return sendError(res, 'Request body must be a JSON object.', 400);
+    }
+
+    const unknownKeys = Object.keys(updates).filter((k) => !KNOWN_SERVICES.includes(k));
+    if (unknownKeys.length > 0) {
+      return sendError(res, `Unknown service keys: ${unknownKeys.join(', ')}.`, 400);
+    }
+
+    const nonBooleans = Object.entries(updates).filter(([, v]) => typeof v !== 'boolean');
+    if (nonBooleans.length > 0) {
+      return sendError(res, 'All service values must be boolean.', 400);
+    }
+
+    const gym = await prisma.gym.findUnique({
+      where: { id: req.gymOwner.gym_id },
+      select: { services: true },
+    });
+    if (!gym) return sendError(res, 'Gym not found.', 404);
+
+    const merged = { ...DEFAULT_SERVICES, ...(gym.services || {}), ...updates };
+    await prisma.gym.update({
+      where: { id: req.gymOwner.gym_id },
+      data: { services: merged },
+    });
+
+    return sendSuccess(res, merged, 'Services updated.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getHealth, triggerSync, patchCredentials, getServices, updateServices };

@@ -6,6 +6,7 @@ const { sendSuccess, sendError } = require('../utils/response');
 const { sendRenewalReminder } = require('../services/whatsappService');
 const { acquireWhatsappLock, releaseWhatsappLock } = require('../services/renewalService');
 const { decryptGymCredentials } = require('../utils/encryption');
+const { gymHasService } = require('../utils/gymServices');
 
 /**
  * POST /send-renewals/:gymId
@@ -37,11 +38,16 @@ async function sendRenewals(req, res, next) {
         name: true,
         whatsapp_phone_number_id: true,
         whatsapp_access_token: true,
+        services: true,
       },
     });
 
     if (!gym) {
       return sendError(res, 'Gym not found.', 404);
+    }
+
+    if (!gymHasService(gym, 'whatsapp_reminders')) {
+      return sendError(res, 'WhatsApp reminders service is disabled for this gym.', 403);
     }
 
     // Decrypt AES-256-GCM credentials before passing to Meta Cloud API.

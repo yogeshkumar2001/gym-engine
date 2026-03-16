@@ -24,6 +24,7 @@ const {
 } = require('../services/whatsappService');
 const { decryptGymCredentials } = require('../utils/encryption');
 const { isRetryEligible, getBackoffMinutes } = require('../utils/retryPolicy');
+const { gymHasService } = require('../utils/gymServices');
 
 // Discount percentage communicated (and applied) in recovery step 2.
 const RECOVERY_DISCOUNT_PERCENT = 5;
@@ -87,6 +88,13 @@ async function processMember(gym, member, now) {
   // Step 2: generate Razorpay payment link — atomic lock prevents duplicate links
   // when two cron instances or manual triggers run simultaneously.
   if (renewal.status === 'pending') {
+    if (!gymHasService(gym, 'payments')) {
+      logger.info('[expiryCron] payments disabled — skipping payment link', {
+        gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+      });
+      return false;
+    }
+
     const linkLockAcquired = await acquirePaymentLinkLock(renewal.id);
 
     if (!linkLockAcquired) {
@@ -124,6 +132,13 @@ async function processMember(gym, member, now) {
   // Step 3: send WhatsApp reminder — atomic lock ensures exactly one send
   // even if two processes both reach this point for the same renewal.
   if (renewal.status === 'link_generated') {
+    if (!gymHasService(gym, 'whatsapp_reminders')) {
+      logger.info('[expiryCron] whatsapp_reminders disabled — skipping WA reminder', {
+        gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+      });
+      return false;
+    }
+
     const whatsappLockAcquired = await acquireWhatsappLock(renewal.id, now);
 
     if (!whatsappLockAcquired) {
@@ -186,6 +201,13 @@ async function processMember(gym, member, now) {
  * @returns {Promise<boolean>} true if a message was sent this run
  */
 async function processRecovery(gym, renewal, member, now) {
+  if (!gymHasService(gym, 'whatsapp_reminders')) {
+    logger.info('[expiryCron] whatsapp_reminders disabled — skipping recovery message', {
+      gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+    });
+    return false;
+  }
+
   const fromStep = renewal.recovery_step;
   const toStep = fromStep + 1;
 
@@ -448,6 +470,7 @@ async function detectExpiringMembers() {
           razorpay_key_secret: true,
           whatsapp_phone_number_id: true,
           whatsapp_access_token: true,
+          services: true,
         },
       });
       gyms = gyms.map(g => decryptGymCredentials(g));

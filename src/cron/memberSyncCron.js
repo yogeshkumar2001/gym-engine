@@ -4,6 +4,7 @@ const cron = require('node-cron');
 const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 const { syncGymMembers } = require('../services/sync.service');
+const { gymHasService } = require('../utils/gymServices');
 
 const MAX_RETRIES   = 3;
 const RETRY_DELAYS  = [0, 30_000, 60_000]; // ms before each attempt (0 = immediate first try)
@@ -72,7 +73,7 @@ async function syncAllGymMembers() {
             { subscription_expires_at: { gt: now } },
           ],
         },
-        select: { id: true, name: true },
+        select: { id: true, name: true, services: true },
       });
     } catch (err) {
       logger.error('[memberSyncCron] Failed to fetch gyms. Aborting run.', {
@@ -89,6 +90,10 @@ async function syncAllGymMembers() {
     logger.info(`[memberSyncCron] Syncing ${gyms.length} gym(s).`);
 
     for (const gym of gyms) {
+      if (!gymHasService(gym, 'google_sheet_sync')) {
+        logger.info(`[memberSyncCron] gym_id=${gym.id} "${gym.name}": google_sheet_sync disabled — skipping.`);
+        continue;
+      }
       try {
         const stats = await syncGymWithRetry(gym);
 

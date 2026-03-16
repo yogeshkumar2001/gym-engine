@@ -30,6 +30,7 @@ model Gym {
   last_synced_at           DateTime?
   last_sync_member_count   Int?
   last_sync_error          String?   @db.Text
+  services                 Json      @default("{\"payments\":true,\"invoice\":true,\"whatsapp_reminders\":true,\"whatsapp_summary\":true,\"google_sheet_sync\":true,\"offers\":false}")
   gymOwners                GymOwner[]
   members                  Member[]
   payments                 Payment[]
@@ -71,6 +72,10 @@ model Member {
   deleted_at                  DateTime?
   reactivation_sent_at        DateTime?
   reactivation_offer_percent  Float?
+  photo_url                   String?
+  id_proof_type               String?
+  id_proof_number             String?
+  id_proof_url                String?
   gym                         Gym                      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
   payments                    Payment[]
   renewals                    Renewal[]
@@ -116,6 +121,7 @@ model Renewal {
   discount_percent         Float?
   discounted_amount        Float?
   recovery_completed       Boolean   @default(false)
+  payment_method           String?
   gym                      Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
   member                   Member    @relation(fields: [member_id], references: [id], onDelete: Cascade)
 

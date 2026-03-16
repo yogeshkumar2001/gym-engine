@@ -16,6 +16,10 @@ router.get('/gyms', adminController.listGyms);
 router.get('/gym/:gymId/deep-health', adminController.gymDeepHealth);
 router.patch('/gym/:gymId/subscription', adminController.updateGymSubscription);
 
+// Service flags
+router.get('/gym/:gymId/services',   adminController.getGymServices);
+router.patch('/gym/:gymId/services', adminController.updateGymServices);
+
 // Analytics — Revenue Forecasting + LTV
 router.get('/gym/:gymId/forecast', analyticsController.revenueForecast);
 router.get('/gym/:gymId/ltv-report', analyticsController.ltvReport);

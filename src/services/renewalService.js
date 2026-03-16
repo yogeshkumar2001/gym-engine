@@ -1,8 +1,12 @@
 'use strict';
 
+const fs = require('fs');
 const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 const { MAX_RETRY, getBackoffMinutes } = require('../utils/retryPolicy');
+const { gymHasService } = require('../utils/gymServices');
+const { generateInvoicePDF } = require('../services/invoiceService');
+const { sendPaymentConfirmation } = require('../services/whatsappService');
 
 // Statuses that indicate an in-progress renewal cycle for the purposes of
 // deduplication in createRenewalIfNotExists.  'dead' is intentionally excluded:
@@ -272,8 +276,25 @@ async function releaseWhatsappLock(renewalId) {
 }
 
 /**
+ * Computes the new expiry date by extending currentExpiry by planDurationDays.
+ * Used by both settleRenewal and handleSuccessfulPayment to keep the logic DRY.
+ *
+ * @param {Date|string} currentExpiry
+ * @param {number} planDurationDays
+ * @returns {Date}
+ */
+function computeNewExpiry(currentExpiry, planDurationDays) {
+  const days = (Number.isInteger(planDurationDays) && planDurationDays > 0)
+    ? planDurationDays
+    : 30;
+  const d = new Date(currentExpiry);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d;
+}
+
+/**
  * Atomically settles a paid renewal:
- * - Sets renewal.status = "paid"
+ * - Sets renewal.status = "paid" and payment_method (if provided)
  * - Extends member.expiry_date by planDurationDays (snapshotted on the renewal)
  * - Ensures member.status = "active"
  * Runs in a transaction so both updates succeed or neither does.
@@ -282,15 +303,11 @@ async function releaseWhatsappLock(renewalId) {
  * @param {number} memberId
  * @param {Date}   currentExpiry
  * @param {number} planDurationDays  — from renewal.plan_duration_days (e.g. 30, 90, 365)
+ * @param {string|null} [paymentMethod]  — 'razorpay' | 'cash' | 'upi' | null
  * @returns {Promise<void>}
  */
-async function settleRenewal(renewalId, memberId, currentExpiry, planDurationDays) {
-  const days = (Number.isInteger(planDurationDays) && planDurationDays > 0)
-    ? planDurationDays
-    : 30; // safe fallback — should never be reached with schema default
-
-  const newExpiry = new Date(currentExpiry);
-  newExpiry.setUTCDate(newExpiry.getUTCDate() + days);
+async function settleRenewal(renewalId, memberId, currentExpiry, planDurationDays, paymentMethod = null) {
+  const newExpiry = computeNewExpiry(currentExpiry, planDurationDays);
 
   await prisma.$transaction(async (tx) => {
     // Atomic claim: only the first concurrent caller gets count=1.
@@ -298,7 +315,7 @@ async function settleRenewal(renewalId, memberId, currentExpiry, planDurationDay
     // touching the member record (idempotent, no double-extension).
     const claim = await tx.renewal.updateMany({
       where: { id: renewalId, status: { not: 'paid' } },
-      data: { status: 'paid' },
+      data: { status: 'paid', payment_method: paymentMethod },
     });
 
     if (claim.count === 0) {
@@ -314,6 +331,63 @@ async function settleRenewal(renewalId, memberId, currentExpiry, planDurationDay
       },
     });
   });
+}
+
+/**
+ * Unified post-payment pipeline: settle the renewal, optionally generate an
+ * invoice PDF, and send a WhatsApp payment confirmation.
+ *
+ * Handles both automated (Razorpay webhook) and manual (cash/UPI) payment paths.
+ *
+ * Idempotent: if renewal.status is already 'paid', returns immediately without
+ * repeating any actions (no duplicate invoice or WA message).
+ *
+ * @param {{ id, name, whatsapp_phone_number_id, whatsapp_access_token, services }} gym — decrypted
+ * @param {{ id, name, phone, plan_name, expiry_date }} member
+ * @param {{ id, status, amount, plan_duration_days }} renewal
+ * @param {'razorpay'|'cash'|'upi'} paymentMethod
+ * @returns {Promise<{ alreadyPaid: boolean, newExpiry: Date }>}
+ */
+async function handleSuccessfulPayment(gym, member, renewal, paymentMethod) {
+  const newExpiry = computeNewExpiry(member.expiry_date, renewal.plan_duration_days);
+
+  if (renewal.status === 'paid') {
+    logger.info('[handleSuccessfulPayment] Renewal already paid — skipping', {
+      gym_id: gym.id, renewal_id: renewal.id,
+    });
+    return { alreadyPaid: true, newExpiry };
+  }
+
+  // Atomically settle: mark paid + extend member expiry
+  await settleRenewal(renewal.id, member.id, member.expiry_date, renewal.plan_duration_days, paymentMethod);
+
+  logger.info('[handleSuccessfulPayment] Renewal settled', {
+    gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+    payment_method: paymentMethod, new_expiry: newExpiry.toISOString(),
+  });
+
+  // Post-settlement notifications — failures must NOT prevent returning success
+  // (the payment is already recorded; notifications are best-effort)
+  let invoicePath = null;
+  try {
+    if (gymHasService(gym, 'invoice')) {
+      invoicePath = await generateInvoicePDF(gym, member, renewal, newExpiry);
+    }
+    await sendPaymentConfirmation(gym, member, renewal, newExpiry, invoicePath);
+  } catch (err) {
+    logger.error('[handleSuccessfulPayment] Post-settlement notification failed', {
+      gym_id: gym.id, renewal_id: renewal.id, message: err.message,
+      api_error: err.response?.data ?? null,
+    });
+  } finally {
+    if (invoicePath) {
+      fs.unlink(invoicePath, (unlinkErr) => {
+        if (unlinkErr) logger.warn(`[handleSuccessfulPayment] Could not delete invoice file: ${invoicePath}`);
+      });
+    }
+  }
+
+  return { alreadyPaid: false, newExpiry };
 }
 
 // ─── Recovery Engine ──────────────────────────────────────────────────────────
@@ -388,6 +462,7 @@ module.exports = {
   acquireWhatsappLock,
   releaseWhatsappLock,
   settleRenewal,
+  handleSuccessfulPayment,
   advanceRecoveryStep,
   applyDiscountToRenewal,
   markRecoveryCompleted,
