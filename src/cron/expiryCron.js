@@ -18,6 +18,7 @@ const {
 const { createPaymentLinkForRenewal, createDiscountedPaymentLink } = require('../services/razorpayService');
 const {
   sendRenewalReminder,
+  sendRenewalReminderUpi,
   sendRecoveryFollowup,
   sendDiscountOffer,
   sendFinalNotice,
@@ -88,7 +89,41 @@ async function processMember(gym, member, now) {
   // when two cron instances or manual triggers run simultaneously.
   if (renewal.status === 'pending') {
     if (!gymHasService(gym, 'payments')) {
-      logger.info('[expiryCron] payments disabled — skipping payment link', {
+      // UPI fallback: if gym has a UPI ID and WhatsApp reminders enabled,
+      // send a UPI deep link instead of a Razorpay link.
+      if (gym.upi_id && gymHasService(gym, 'whatsapp_reminders')) {
+        const upiUrl = `upi://pay?pa=${encodeURIComponent(gym.upi_id)}&am=${renewal.amount}&tn=GymRenewal&cu=INR`;
+
+        const whatsappLockAcquired = await acquireWhatsappLock(renewal.id, now);
+        if (!whatsappLockAcquired) {
+          logger.debug('[expiryCron] UPI WhatsApp lock not acquired — already handled', {
+            gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+          });
+          return false;
+        }
+
+        try {
+          const { messageId } = await sendRenewalReminderUpi(gym, renewal, member, upiUrl);
+          await prisma.renewal.update({
+            where: { id: renewal.id },
+            data: {
+              upi_url: upiUrl,
+              payment_method: 'upi',
+              whatsapp_message_id: messageId,
+              whatsapp_status: 'sent',
+            },
+          });
+          logger.info('[expiryCron] UPI reminder sent', {
+            gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+          });
+          return true;
+        } catch (err) {
+          await releaseWhatsappLock(renewal.id);
+          throw err;
+        }
+      }
+
+      logger.info('[expiryCron] payments disabled and no UPI ID — skipping', {
         gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
       });
       return false;
@@ -472,6 +507,7 @@ async function detectExpiringMembers() {
           whatsapp_access_token: true,
           services: true,
           recovery_discount_percent: true,
+          upi_id: true,
         },
       });
       gyms = gyms.map(g => decryptGymCredentials(g));

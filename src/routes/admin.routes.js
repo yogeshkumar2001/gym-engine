@@ -35,4 +35,11 @@ router.get('/gym/:gymId/recovery-stats', adminController.getRecoveryStats);
 router.get('/gym/:gymId/reactivation-stats', adminController.getReactivationStats);
 router.get('/gym/:gymId/lead-stats', adminController.getLeadStats);
 
+// Multi-gym: link owner to additional gym
+router.post('/gym/:gymId/owners', adminController.linkOwnerToGym);
+
+// Cohort + Retention (admin view)
+router.get('/gym/:gymId/cohorts',   analyticsController.cohortReport);
+router.get('/gym/:gymId/retention', analyticsController.retentionCurve);
+
 module.exports = router;

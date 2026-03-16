@@ -474,8 +474,75 @@ async function sendTrialFollowup(gym, member) {
   return { messageId };
 }
 
+const UPI_TEMPLATE_NAME = 'renewal_reminder_upi';
+
+/**
+ * Sends a WhatsApp renewal reminder with a UPI deep link via Meta Cloud API.
+ * Used when the gym has payments service disabled but has a upi_id configured.
+ *
+ * Template body parameters (positional):
+ *   {{1}} — member.name
+ *   {{2}} — amount formatted as ₹XXX
+ *   {{3}} — UPI deep link URL
+ *
+ * @param {{ id: number, whatsapp_phone_number_id: string, whatsapp_access_token: string }} gym
+ * @param {{ id: number, amount: number }} renewal
+ * @param {{ id: number, name: string, phone: string }} member
+ * @param {string} upiUrl  Pre-built UPI deep link
+ * @returns {Promise<{ messageId: string|null, status: string }>}
+ */
+async function sendRenewalReminderUpi(gym, renewal, member, upiUrl) {
+  const url = `https://graph.facebook.com/${GRAPH_API_VERSION}/${gym.whatsapp_phone_number_id}/messages`;
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: member.phone,
+    type: 'template',
+    template: {
+      name: UPI_TEMPLATE_NAME,
+      language: { code: 'en' },
+      components: [
+        {
+          type: 'body',
+          parameters: [
+            { type: 'text', text: member.name },
+            { type: 'text', text: `₹${renewal.amount}` },
+            { type: 'text', text: upiUrl },
+          ],
+        },
+      ],
+    },
+  };
+
+  logger.debug('[whatsappService] Sending UPI renewal reminder', {
+    gym_id: gym.id,
+    renewal_id: renewal.id,
+    member_id: member.id,
+    to: member.phone,
+    template: UPI_TEMPLATE_NAME,
+  });
+
+  const response = await axios.post(url, payload, {
+    headers: {
+      Authorization: `Bearer ${gym.whatsapp_access_token}`,
+      'Content-Type': 'application/json',
+    },
+  });
+
+  const messageId = response.data?.messages?.[0]?.id ?? null;
+
+  logger.info('[whatsappService] UPI reminder sent successfully', {
+    gym_id: gym.id,
+    renewal_id: renewal.id,
+    member_id: member.id,
+    whatsapp_message_id: messageId,
+  });
+
+  return { messageId, status: 'sent' };
+}
+
 module.exports = {
   sendRenewalReminder,
+  sendRenewalReminderUpi,
   sendDailySummary,
   sendPaymentConfirmation,
   sendRecoveryFollowup,

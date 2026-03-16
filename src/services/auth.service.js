@@ -47,16 +47,22 @@ async function registerGym({ gym_name, owner_name, phone, pin }) {
       },
     });
 
+    // Create junction entry for multi-gym support
+    await tx.gymOwnerGym.create({
+      data: { owner_id: owner.id, gym_id: gym.id, role: 'owner' },
+    });
+
     return { gym_id: gym.id, owner_id: owner.id, onboarding_token };
   });
 
+  const gym_ids = [result.gym_id];
   const token = jwt.sign(
-    { owner_id: result.owner_id, gym_id: result.gym_id },
+    { owner_id: result.owner_id, gym_id: result.gym_id, gym_ids },
     process.env.JWT_SECRET,
     { expiresIn: '7d', issuer: 'gym-renewal-engine', audience: 'owner-dashboard' }
   );
 
-  return { token, gym_id: result.gym_id, onboarding_token: result.onboarding_token };
+  return { token, gym_id: result.gym_id, gym_ids, onboarding_token: result.onboarding_token };
 }
 
 async function loginGymOwner({ phone, pin }) {
@@ -74,13 +80,25 @@ async function loginGymOwner({ phone, pin }) {
     throw err;
   }
 
+  // Load all gym IDs this owner can access via junction table
+  const gymAccess = await prisma.gymOwnerGym.findMany({
+    where: { owner_id: owner.id },
+    select: { gym_id: true },
+    orderBy: { created_at: 'asc' },
+  });
+
+  // Fall back to primary gym_id if no junction entries exist (legacy accounts)
+  const gym_ids = gymAccess.length > 0
+    ? gymAccess.map((g) => g.gym_id)
+    : [owner.gym_id];
+
   const token = jwt.sign(
-    { owner_id: owner.id, gym_id: owner.gym_id },
+    { owner_id: owner.id, gym_id: gym_ids[0], gym_ids },
     process.env.JWT_SECRET,
     { expiresIn: '7d', issuer: 'gym-renewal-engine', audience: 'owner-dashboard' }
   );
 
-  return { token, gym_id: owner.gym_id };
+  return { token, gym_id: gym_ids[0], gym_ids };
 }
 
 module.exports = { registerGym, loginGymOwner };

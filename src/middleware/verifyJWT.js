@@ -16,7 +16,21 @@ function verifyJWT(req, res, next) {
       issuer: 'gym-renewal-engine',
       audience: 'owner-dashboard',
     });
-    req.gymOwner = { owner_id: payload.owner_id, gym_id: payload.gym_id };
+
+    // gym_ids: list of all gyms this owner can access (multi-gym support).
+    // Falls back to single gym_id for tokens issued before multi-gym was added.
+    const gymIds = Array.isArray(payload.gym_ids) && payload.gym_ids.length > 0
+      ? payload.gym_ids
+      : [payload.gym_id];
+
+    // Resolve the active gym from the X-Gym-Id header. If the requested gym is
+    // not in the owner's access list, default to their first gym.
+    const requestedGymId = parseInt(req.headers['x-gym-id'], 10);
+    const gymId = !isNaN(requestedGymId) && gymIds.includes(requestedGymId)
+      ? requestedGymId
+      : gymIds[0];
+
+    req.gymOwner = { owner_id: payload.owner_id, gym_id: gymId, gym_ids: gymIds };
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {

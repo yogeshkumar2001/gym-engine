@@ -104,4 +104,82 @@ async function updateServices(req, res, next) {
   }
 }
 
-module.exports = { getHealth, triggerSync, patchCredentials, getServices, updateServices };
+async function getSubscription(req, res, next) {
+  try {
+    const gym = await prisma.gym.findUnique({
+      where: { id: req.gymOwner.gym_id },
+      select: {
+        subscription_tier: true,
+        member_limit: true,
+        subscription_expires_at: true,
+      },
+    });
+    if (!gym) return sendError(res, 'Gym not found.', 404);
+
+    const member_count = await prisma.member.count({
+      where: { gym_id: req.gymOwner.gym_id, deleted_at: null },
+    });
+
+    return sendSuccess(res, {
+      subscription_tier:       gym.subscription_tier,
+      member_limit:            gym.member_limit,
+      member_count,
+      subscription_expires_at: gym.subscription_expires_at,
+    }, 'Subscription info retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getUpiSettings(req, res, next) {
+  try {
+    const gym = await prisma.gym.findUnique({
+      where: { id: req.gymOwner.gym_id },
+      select: { upi_id: true },
+    });
+    if (!gym) return sendError(res, 'Gym not found.', 404);
+    return sendSuccess(res, { upi_id: gym.upi_id ?? null }, 'UPI settings retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateUpiSettings(req, res, next) {
+  try {
+    const { upi_id } = req.body;
+    if (upi_id !== null && upi_id !== undefined) {
+      if (typeof upi_id !== 'string') {
+        return sendError(res, 'upi_id must be a string or null.', 400);
+      }
+      const trimmed = upi_id.trim();
+      // Basic UPI ID format: localpart@provider
+      if (trimmed && !/^[a-zA-Z0-9._-]+@[a-zA-Z0-9]+$/.test(trimmed)) {
+        return sendError(res, 'Invalid UPI ID format. Expected format: name@bank', 400);
+      }
+      await prisma.gym.update({
+        where: { id: req.gymOwner.gym_id },
+        data: { upi_id: trimmed || null },
+      });
+      return sendSuccess(res, { upi_id: trimmed || null }, 'UPI settings updated.');
+    }
+    return sendError(res, 'upi_id field is required.', 400);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getMyGyms(req, res, next) {
+  try {
+    const gymIds = req.gymOwner.gym_ids;
+    const gyms = await prisma.gym.findMany({
+      where: { id: { in: gymIds } },
+      select: { id: true, name: true },
+      orderBy: { id: 'asc' },
+    });
+    return sendSuccess(res, gyms, 'Accessible gyms retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { getHealth, triggerSync, patchCredentials, getServices, updateServices, getSubscription, getUpiSettings, updateUpiSettings, getMyGyms };

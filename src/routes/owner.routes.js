@@ -13,6 +13,7 @@ const renewalController = require('../controllers/renewal.controller');
 const invoiceController = require('../controllers/invoice.controller');
 const manualPaymentController = require('../controllers/manualPayment.controller');
 const discountController       = require('../controllers/discount.controller');
+const attendanceController     = require('../controllers/attendance.controller');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -21,12 +22,16 @@ const router = Router();
 router.use(verifyJWT);
 
 router.get('/health', ownerController.getHealth);
+router.get('/my-gyms', ownerController.getMyGyms);
 router.post('/sync', ownerController.triggerSync);
 router.patch('/credentials', ownerController.patchCredentials);
+router.get('/subscription', ownerController.getSubscription);
 router.get('/services', ownerController.getServices);
 router.patch('/services', ownerController.updateServices);
 router.get('/settings/discounts',  discountController.getDiscounts);
 router.patch('/settings/discounts', discountController.updateDiscounts);
+router.get('/settings/upi',  ownerController.getUpiSettings);
+router.patch('/settings/upi', ownerController.updateUpiSettings);
 
 // Members — specific routes MUST come before /:memberId param route
 router.get('/members/summary',  memberController.getMemberSummary);
@@ -35,7 +40,10 @@ router.post('/members/import',      upload.single('file'), importController.impo
 router.post('/members/import/bulk', importController.bulkImportMembers);
 router.get('/members',          memberController.listMembers);
 router.post('/members',         memberController.createMember);
-router.post('/members/:memberId/mark-paid', manualPaymentController.markMemberPaid);
+router.post('/members/:memberId/mark-paid',           manualPaymentController.markMemberPaid);
+router.post('/members/:memberId/checkin',             attendanceController.checkIn);
+router.post('/members/:memberId/checkout',            attendanceController.checkOut);
+router.get('/members/:memberId/attendance-stats',     attendanceController.getMemberAttendanceStats);
 router.patch('/members/:memberId/profile', memberController.updateMemberProfile);
 router.patch('/members/:memberId', memberController.updateMember);
 router.delete('/members/:memberId', memberController.deleteMember);
@@ -58,9 +66,15 @@ router.get('/invoices/:renewalId/download',    invoiceController.downloadInvoice
 router.get('/renewals', renewalController.listRenewals);
 
 // Analytics
-router.get('/analytics/forecast', analyticsController.revenueForecast);
-router.get('/analytics/ltv',      analyticsController.ltvReport);
-router.get('/analytics/plans',    analyticsController.planReport);
+router.get('/analytics/forecast',  analyticsController.revenueForecast);
+router.get('/analytics/ltv',       analyticsController.ltvReport);
+router.get('/analytics/plans',     analyticsController.planReport);
+router.get('/analytics/cohorts',   analyticsController.cohortReport);
+router.get('/analytics/retention', analyticsController.retentionCurve);
+
+// Attendance — /stats must come before any param route
+router.get('/attendance/stats',  attendanceController.getAttendanceStats);
+router.get('/attendance',        attendanceController.listAttendance);
 
 // Lead Funnel
 router.post('/leads',                   leadController.createLead);

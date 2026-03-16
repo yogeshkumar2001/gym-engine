@@ -33,13 +33,18 @@ model Gym {
   services                      Json      @default("{\"payments\":true,\"invoice\":true,\"whatsapp_reminders\":true,\"whatsapp_summary\":true,\"google_sheet_sync\":true,\"offers\":false}")
   recovery_discount_percent     Float     @default(5)
   reactivation_discount_percent Float     @default(10)
+  upi_id                        String?
+  subscription_tier             String    @default("starter") // starter | growth | pro | enterprise
+  member_limit                  Int       @default(100)
   gymOwners                GymOwner[]
+  gymOwnerAccess           GymOwnerGym[]
   members                  Member[]
   payments                 Payment[]
   renewals                 Renewal[]
   reactivation_campaigns   ReactivationCampaign[]
   leads                    Lead[]
   plans                    Plan[]
+  attendance               Attendance[]
 }
 
 model Plan {
@@ -82,6 +87,7 @@ model Member {
   payments                    Payment[]
   renewals                    Renewal[]
   reactivation_campaigns      ReactivationCampaign[]
+  attendance                  Attendance[]
 
   @@unique([gym_id, phone])
   @@index([gym_id, status])
@@ -124,6 +130,7 @@ model Renewal {
   discounted_amount        Float?
   recovery_completed       Boolean   @default(false)
   payment_method           String?
+  upi_url                  String?
   gym                      Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
   member                   Member    @relation(fields: [member_id], references: [id], onDelete: Cascade)
 
@@ -141,6 +148,7 @@ model GymOwner {
   password   String
   created_at DateTime @default(now())
   gym        Gym      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  gymAccess  GymOwnerGym[]
 
   @@index([gym_id], map: "GymOwner_gym_id_fkey")
 }
@@ -158,6 +166,33 @@ model ReactivationCampaign {
   member           Member    @relation(fields: [member_id], references: [id], onDelete: Cascade)
 
   @@index([gym_id])
+  @@index([member_id])
+}
+
+model GymOwnerGym {
+  id         Int      @id @default(autoincrement())
+  owner_id   Int
+  gym_id     Int
+  role       String   @default("owner") // owner | manager | viewer
+  created_at DateTime @default(now())
+  owner      GymOwner @relation(fields: [owner_id], references: [id], onDelete: Cascade)
+  gym        Gym      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+
+  @@unique([owner_id, gym_id])
+  @@index([owner_id])
+  @@index([gym_id])
+}
+
+model Attendance {
+  id             Int       @id @default(autoincrement())
+  gym_id         Int
+  member_id      Int
+  checked_in_at  DateTime  @default(now())
+  checked_out_at DateTime?
+  gym            Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+  member         Member    @relation(fields: [member_id], references: [id], onDelete: Cascade)
+
+  @@index([gym_id, checked_in_at])
   @@index([member_id])
 }
 

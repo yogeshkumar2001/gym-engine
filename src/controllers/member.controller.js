@@ -163,6 +163,24 @@ async function createMember(req, res, next) {
   const now = new Date();
 
   try {
+    // Tier limit enforcement: count existing non-deleted members against member_limit
+    const gym = await prisma.gym.findUnique({
+      where: { id: gymId },
+      select: { member_limit: true, subscription_tier: true },
+    });
+    if (gym) {
+      const currentCount = await prisma.member.count({
+        where: { gym_id: gymId, deleted_at: null },
+      });
+      if (currentCount >= gym.member_limit) {
+        return sendError(
+          res,
+          `Member limit reached for your ${gym.subscription_tier} plan (${gym.member_limit} members). Please upgrade to add more members.`,
+          402
+        );
+      }
+    }
+
     const member = await prisma.member.create({
       data: {
         gym_id: gymId,

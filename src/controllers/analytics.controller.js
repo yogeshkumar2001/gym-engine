@@ -2,6 +2,7 @@
 
 const forecastService = require('../services/forecastService');
 const analyticsService = require('../services/analyticsService');
+const cohortService = require('../services/cohortService');
 const { sendSuccess, sendError } = require('../utils/response');
 
 /**
@@ -76,4 +77,38 @@ async function planReport(req, res, next) {
   }
 }
 
-module.exports = { revenueForecast, ltvReport, planReport };
+/**
+ * GET /admin/gym/:gymId/cohorts
+ * GET /owner/analytics/cohorts
+ */
+async function cohortReport(req, res, next) {
+  const gymId = resolveGymId(req);
+  if (!Number.isInteger(gymId) || gymId <= 0) {
+    return sendError(res, 'Invalid gymId.', 400);
+  }
+  try {
+    const data = await cohortService.getMemberCohorts(gymId);
+    return sendSuccess(res, data, 'Cohort report retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /admin/gym/:gymId/retention
+ * GET /owner/analytics/retention
+ */
+async function retentionCurve(req, res, next) {
+  const gymId = resolveGymId(req);
+  if (!Number.isInteger(gymId) || gymId <= 0) {
+    return sendError(res, 'Invalid gymId.', 400);
+  }
+  try {
+    const data = await cohortService.getRetentionCurve(gymId);
+    return sendSuccess(res, data, 'Retention curve retrieved.');
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { revenueForecast, ltvReport, planReport, cohortReport, retentionCurve };

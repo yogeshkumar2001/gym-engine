@@ -52,17 +52,26 @@ async function gymDeepHealth(req, res, next) {
   }
 }
 
+// Member limits per tier — single source of truth
+const TIER_LIMITS = {
+  starter:    100,
+  growth:     300,
+  pro:        1000,
+  enterprise: 99999,
+};
+
+const VALID_TIERS = Object.keys(TIER_LIMITS);
+
 /**
  * PATCH /admin/gym/:gymId/subscription
  *
- * Sets or clears the subscription expiry date for a gym.
+ * Sets or clears the subscription expiry date and optionally the tier for a gym.
  *
  * Body:
  *   { "subscription_expires_at": "2025-12-31T23:59:59.000Z" }  — set expiry
  *   { "subscription_expires_at": null }                          — unlimited
- *
- * The cron jobs (expiryCron, summaryCron) skip gyms whose subscription_expires_at
- * is non-null and in the past.  Setting null re-enables a lapsed gym immediately.
+ *   { "tier": "growth" }                                         — set tier (auto-sets member_limit)
+ *   Both fields may be provided together.
  */
 async function updateGymSubscription(req, res, next) {
   const gymId = parseInt(req.params.gymId, 10);
@@ -70,28 +79,61 @@ async function updateGymSubscription(req, res, next) {
     return sendError(res, 'Invalid gymId.', 400);
   }
 
-  if (!('subscription_expires_at' in req.body)) {
-    return sendError(res, 'subscription_expires_at is required.', 400);
+  const hasExpiry = 'subscription_expires_at' in req.body;
+  const hasTier   = 'tier' in req.body;
+
+  if (!hasExpiry && !hasTier) {
+    return sendError(res, 'Provide subscription_expires_at and/or tier.', 400);
   }
 
-  const raw = req.body.subscription_expires_at;
-
-  let expiresAt = null;
-  if (raw !== null) {
-    const parsed = new Date(raw);
-    if (isNaN(parsed.getTime())) {
-      return sendError(res, 'subscription_expires_at must be a valid ISO 8601 date string or null.', 400);
+  let expiresAt;
+  if (hasExpiry) {
+    const raw = req.body.subscription_expires_at;
+    if (raw !== null) {
+      const parsed = new Date(raw);
+      if (isNaN(parsed.getTime())) {
+        return sendError(res, 'subscription_expires_at must be a valid ISO 8601 date string or null.', 400);
+      }
+      expiresAt = parsed;
+    } else {
+      expiresAt = null;
     }
-    expiresAt = parsed;
+  }
+
+  let tier;
+  if (hasTier) {
+    tier = req.body.tier;
+    if (!VALID_TIERS.includes(tier)) {
+      return sendError(res, `tier must be one of: ${VALID_TIERS.join(', ')}.`, 400);
+    }
   }
 
   try {
-    await adminService.updateGymSubscription(gymId, expiresAt);
-    return sendSuccess(
-      res,
-      { gym_id: gymId, subscription_expires_at: expiresAt },
-      'Subscription updated successfully.'
-    );
+    const gym = await prisma.gym.findUnique({ where: { id: gymId }, select: { id: true } });
+    if (!gym) return sendError(res, 'Gym not found.', 404);
+
+    if (hasExpiry) {
+      await adminService.updateGymSubscription(gymId, expiresAt);
+    }
+
+    if (hasTier) {
+      await prisma.gym.update({
+        where: { id: gymId },
+        data: { subscription_tier: tier, member_limit: TIER_LIMITS[tier] },
+      });
+    }
+
+    const result = await prisma.gym.findUnique({
+      where: { id: gymId },
+      select: {
+        id: true,
+        subscription_expires_at: true,
+        subscription_tier: true,
+        member_limit: true,
+      },
+    });
+
+    return sendSuccess(res, result, 'Subscription updated successfully.');
   } catch (err) {
     if (err.status === 404) {
       return sendError(res, err.message, 404);
@@ -273,6 +315,44 @@ async function updateGymDiscounts(req, res, next) {
   }
 }
 
+/**
+ * POST /admin/gym/:gymId/owners
+ * Links an existing GymOwner to an additional gym.
+ *
+ * Body: { owner_id: number, role?: "owner"|"manager"|"viewer" }
+ */
+async function linkOwnerToGym(req, res, next) {
+  const gymId = parseGymId(req);
+  if (!gymId) return sendError(res, 'Invalid gymId.', 400);
+
+  const { owner_id, role = 'owner' } = req.body;
+  if (!owner_id || !Number.isInteger(Number(owner_id))) {
+    return sendError(res, 'owner_id is required and must be an integer.', 400);
+  }
+  if (!['owner', 'manager', 'viewer'].includes(role)) {
+    return sendError(res, 'role must be one of: owner, manager, viewer.', 400);
+  }
+
+  try {
+    const [gym, owner] = await Promise.all([
+      prisma.gym.findUnique({ where: { id: gymId }, select: { id: true } }),
+      prisma.gymOwner.findUnique({ where: { id: Number(owner_id) }, select: { id: true } }),
+    ]);
+    if (!gym)   return sendError(res, 'Gym not found.', 404);
+    if (!owner) return sendError(res, 'Owner not found.', 404);
+
+    const access = await prisma.gymOwnerGym.upsert({
+      where: { owner_id_gym_id: { owner_id: Number(owner_id), gym_id: gymId } },
+      create: { owner_id: Number(owner_id), gym_id: gymId, role },
+      update: { role },
+    });
+
+    return sendSuccess(res, access, 'Owner linked to gym.');
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   globalHealth,
   gymDeepHealth,
@@ -284,4 +364,5 @@ module.exports = {
   getGymServices,
   updateGymServices,
   updateGymDiscounts,
+  linkOwnerToGym,
 };
