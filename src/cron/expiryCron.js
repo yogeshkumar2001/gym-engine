@@ -26,8 +26,7 @@ const { decryptGymCredentials } = require('../utils/encryption');
 const { isRetryEligible, getBackoffMinutes } = require('../utils/retryPolicy');
 const { gymHasService } = require('../utils/gymServices');
 
-// Discount percentage communicated (and applied) in recovery step 2.
-const RECOVERY_DISCOUNT_PERCENT = 5;
+// Discount percentage is now per-gym (gym.recovery_discount_percent).
 
 /**
  * Full pipeline for a single member within a gym run:
@@ -228,19 +227,20 @@ async function processRecovery(gym, renewal, member, now) {
       ({ messageId } = await sendRecoveryFollowup(gym, renewal, member));
 
     } else if (toStep === 2) {
-      // Discount: create new Razorpay link at reduced price
+      // Discount: create new Razorpay link at reduced price (per-gym configurable %)
+      const discountPct = gym.recovery_discount_percent ?? 5;
       const discountedAmount =
-        Math.round(renewal.amount * (1 - RECOVERY_DISCOUNT_PERCENT / 100) * 100) / 100;
+        Math.round(renewal.amount * (1 - discountPct / 100) * 100) / 100;
 
       const { paymentLinkId, shortUrl } = await createDiscountedPaymentLink(
         gym, renewal, member, discountedAmount
       );
       await applyDiscountToRenewal(
-        renewal.id, paymentLinkId, shortUrl, RECOVERY_DISCOUNT_PERCENT, discountedAmount
+        renewal.id, paymentLinkId, shortUrl, discountPct, discountedAmount
       );
       // Send with the NEW short URL
       ({ messageId } = await sendDiscountOffer(
-        gym, { ...renewal, razorpay_short_url: shortUrl }, member, RECOVERY_DISCOUNT_PERCENT
+        gym, { ...renewal, razorpay_short_url: shortUrl }, member, discountPct
       ));
 
     } else if (toStep === 3) {
@@ -471,6 +471,7 @@ async function detectExpiringMembers() {
           whatsapp_phone_number_id: true,
           whatsapp_access_token: true,
           services: true,
+          recovery_discount_percent: true,
         },
       });
       gyms = gyms.map(g => decryptGymCredentials(g));

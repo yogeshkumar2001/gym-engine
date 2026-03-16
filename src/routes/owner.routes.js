@@ -12,6 +12,7 @@ const planController = require('../controllers/plan.controller');
 const renewalController = require('../controllers/renewal.controller');
 const invoiceController = require('../controllers/invoice.controller');
 const manualPaymentController = require('../controllers/manualPayment.controller');
+const discountController       = require('../controllers/discount.controller');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -24,6 +25,8 @@ router.post('/sync', ownerController.triggerSync);
 router.patch('/credentials', ownerController.patchCredentials);
 router.get('/services', ownerController.getServices);
 router.patch('/services', ownerController.updateServices);
+router.get('/settings/discounts',  discountController.getDiscounts);
+router.patch('/settings/discounts', discountController.updateDiscounts);
 
 // Members — specific routes MUST come before /:memberId param route
 router.get('/members/summary',  memberController.getMemberSummary);

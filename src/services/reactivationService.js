@@ -160,5 +160,4 @@ module.exports = {
   recordReactivationCampaign,
   markReactivationConverted,
   getReactivationStats,
-  REACTIVATION_DISCOUNT_PERCENT,
 };

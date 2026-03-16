@@ -30,7 +30,9 @@ model Gym {
   last_synced_at           DateTime?
   last_sync_member_count   Int?
   last_sync_error          String?   @db.Text
-  services                 Json      @default("{\"payments\":true,\"invoice\":true,\"whatsapp_reminders\":true,\"whatsapp_summary\":true,\"google_sheet_sync\":true,\"offers\":false}")
+  services                      Json      @default("{\"payments\":true,\"invoice\":true,\"whatsapp_reminders\":true,\"whatsapp_summary\":true,\"google_sheet_sync\":true,\"offers\":false}")
+  recovery_discount_percent     Float     @default(5)
+  reactivation_discount_percent Float     @default(10)
   gymOwners                GymOwner[]
   members                  Member[]
   payments                 Payment[]

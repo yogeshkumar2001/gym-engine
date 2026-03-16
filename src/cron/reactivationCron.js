@@ -4,7 +4,7 @@ const cron = require('node-cron');
 const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 const { decryptGymCredentials } = require('../utils/encryption');
-const { detectChurnedMembers, recordReactivationCampaign, REACTIVATION_DISCOUNT_PERCENT } = require('../services/reactivationService');
+const { detectChurnedMembers, recordReactivationCampaign } = require('../services/reactivationService');
 const { sendReactivationOffer } = require('../services/whatsappService');
 
 /**
@@ -34,8 +34,9 @@ async function processGymReactivation(gym) {
 
   for (const member of members) {
     try {
-      await sendReactivationOffer(gym, member, REACTIVATION_DISCOUNT_PERCENT);
-      await recordReactivationCampaign(gym.id, member.id, REACTIVATION_DISCOUNT_PERCENT);
+      const discountPct = gym.reactivation_discount_percent ?? 10;
+      await sendReactivationOffer(gym, member, discountPct);
+      await recordReactivationCampaign(gym.id, member.id, discountPct);
       sent++;
       logger.info(`[reactivationCron] Reactivation offer sent — gym ${gym.id}, member ${member.id}`);
     } catch (err) {
@@ -71,6 +72,7 @@ async function runReactivationJob() {
       whatsapp_phone_number_id: true,
       whatsapp_access_token: true,
       owner_phone: true,
+      reactivation_discount_percent: true,
     },
   });
 

@@ -231,6 +231,48 @@ async function updateGymServices(req, res, next) {
   }
 }
 
+/**
+ * PATCH /admin/gym/:gymId/discounts
+ * Body: { recovery_discount_percent?, reactivation_discount_percent? }
+ */
+async function updateGymDiscounts(req, res, next) {
+  const gymId = parseGymId(req);
+  if (!gymId) return sendError(res, 'Invalid gymId.', 400);
+
+  const { recovery_discount_percent, reactivation_discount_percent } = req.body;
+
+  if (recovery_discount_percent === undefined && reactivation_discount_percent === undefined) {
+    return sendError(res, 'Provide at least one discount field.', 400);
+  }
+
+  const data = {};
+  for (const [key, val] of [
+    ['recovery_discount_percent', recovery_discount_percent],
+    ['reactivation_discount_percent', reactivation_discount_percent],
+  ]) {
+    if (val === undefined) continue;
+    const num = Number(val);
+    if (!Number.isFinite(num) || num < 0 || num > 50) {
+      return sendError(res, `${key} must be a number between 0 and 50.`, 400);
+    }
+    data[key] = num;
+  }
+
+  try {
+    const gym = await prisma.gym.findUnique({ where: { id: gymId }, select: { id: true } });
+    if (!gym) return sendError(res, 'Gym not found.', 404);
+
+    const updated = await prisma.gym.update({
+      where: { id: gymId },
+      data,
+      select: { id: true, recovery_discount_percent: true, reactivation_discount_percent: true },
+    });
+    return sendSuccess(res, updated, 'Discount settings updated.');
+  } catch (err) {
+    next(err);
+  }
+}
+
 module.exports = {
   globalHealth,
   gymDeepHealth,
@@ -241,4 +283,5 @@ module.exports = {
   listGyms,
   getGymServices,
   updateGymServices,
+  updateGymDiscounts,
 };

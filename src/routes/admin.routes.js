@@ -20,6 +20,9 @@ router.patch('/gym/:gymId/subscription', adminController.updateGymSubscription);
 router.get('/gym/:gymId/services',   adminController.getGymServices);
 router.patch('/gym/:gymId/services', adminController.updateGymServices);
 
+// Discount settings
+router.patch('/gym/:gymId/discounts', adminController.updateGymDiscounts);
+
 // Analytics — Revenue Forecasting + LTV
 router.get('/gym/:gymId/forecast', analyticsController.revenueForecast);
 router.get('/gym/:gymId/ltv-report', analyticsController.ltvReport);
