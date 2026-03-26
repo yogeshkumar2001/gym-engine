@@ -13,8 +13,9 @@ model Gym {
   razorpay_key_id          String
   razorpay_key_secret      String
   razorpay_webhook_secret  String
-  whatsapp_phone_number_id String
-  whatsapp_access_token    String     @db.Text
+  whatsapp_phone_number_id_deprecated String?
+  whatsapp_access_token_deprecated    String?   @db.Text
+  whatsapp_status                     String    @default("not_setup")
   google_sheet_id          String
   owner_phone              String
   created_at               DateTime   @default(now())
@@ -45,6 +46,9 @@ model Gym {
   leads                    Lead[]
   plans                    Plan[]
   attendance               Attendance[]
+  whatsapp_account         WhatsappAccount?
+  whatsapp_config          WhatsappConfig?
+  message_queue            MessageQueue[]
 }
 
 model Plan {
@@ -213,4 +217,111 @@ model Lead {
 
   @@unique([gym_id, phone])
   @@index([gym_id])
+}
+
+model WhatsappAccount {
+  id              String    @id @default(uuid()) @db.Char(36)
+  gym_id          Int       @unique
+  phone_number_id String?   @db.VarChar(50)
+  display_phone   String    @db.VarChar(15)
+  waba_id         String?   @db.VarChar(50)
+  status          String    @default("pending")  // pending|verifying|active|suspended|deactivated
+  verified_at     DateTime?
+  quality_rating  String    @default("GREEN")    // GREEN|YELLOW|RED
+  messaging_tier  String    @default("TIER_1")   // TIER_1|TIER_2|TIER_3
+  fallback_mode   Boolean   @default(true)
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  gym             Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+
+  @@index([gym_id])
+  @@index([phone_number_id])
+}
+
+model WhatsappTemplate {
+  id               String   @id @default(uuid()) @db.Char(36)
+  template_name    String   @db.VarChar(100)
+  template_type    String   @db.VarChar(30)  // renewal_reminder|recovery_day1|...|daily_summary|payment_confirm
+  language         String   @default("en") @db.VarChar(10)
+  meta_template_id String?  @db.VarChar(50)
+  status           String   @default("draft")  // draft|submitted|approved|rejected|paused|disabled
+  rejection_reason String?  @db.Text
+  body_text        String   @db.Text
+  button_config    Json?
+  quality_score    Decimal? @db.Decimal(3, 2)
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+
+  @@unique([template_name, language])
+}
+
+model MessageQueue {
+  id               String    @id @default(uuid()) @db.Char(36)
+  gym_id           Int
+  member_id        Int?
+  template_type    String    @db.VarChar(30)
+  template_params  Json
+  recipient_phone  String    @db.VarChar(15)
+  status           String    @default("queued")  // queued|sending|sent|delivered|read|failed|dead
+  attempts         Int       @default(0)
+  max_attempts     Int       @default(3)
+  next_retry_at    DateTime?
+  wamid            String?   @db.VarChar(100)
+  error_code       String?   @db.VarChar(20)
+  error_detail     String?   @db.Text
+  scheduled_at     DateTime  @default(now())
+  sent_at          DateTime?
+  delivered_at     DateTime?
+  read_at          DateTime?
+  failed_at        DateTime?
+  trigger_type     String?   @db.VarChar(30)  // expiry_cron|recovery_engine|winback|daily_summary|manual|invoice
+  trigger_ref      String?   @db.Char(36)
+  created_at       DateTime  @default(now())
+  gym              Gym       @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+
+  @@index([status, next_retry_at])
+  @@index([gym_id, member_id, created_at])
+  @@index([wamid])
+}
+
+model WhatsappConfig {
+  id                     String   @id @default(uuid()) @db.Char(36)
+  gym_id                 Int      @unique
+  reminder_days_before   Json     @default("[7, 3, 1]")
+  reminder_send_time     String   @default("09:00") @db.VarChar(5)
+  summary_send_time      String   @default("20:00") @db.VarChar(5)
+  recovery_enabled       Boolean  @default(true)
+  recovery_discount_pct  Decimal  @default(5.0) @db.Decimal(4, 1)
+  recovery_start_day     Int      @default(1)
+  recovery_sequence      Json     @default("[{\"day\":1,\"action\":\"reminder\",\"template\":\"recovery_day1\"},{\"day\":2,\"action\":\"reminder\",\"template\":\"recovery_day2\"},{\"day\":4,\"action\":\"discount\",\"template\":\"recovery_discount\"},{\"day\":6,\"action\":\"final_notice\",\"template\":\"recovery_final\"}]")
+  winback_enabled        Boolean  @default(true)
+  winback_delay_days     Int      @default(30)
+  winback_discount_pct   Decimal  @default(10.0) @db.Decimal(4, 1)
+  winback_max_attempts   Int      @default(2)
+  payment_mode           String   @default("razorpay") @db.VarChar(20)  // razorpay|upi_only|cash_only|razorpay_upi
+  upi_id                 String?  @db.VarChar(100)
+  razorpay_enabled       Boolean  @default(false)
+  notify_on_payment      Boolean  @default(true)
+  notify_on_new_member   Boolean  @default(true)
+  daily_summary_enabled  Boolean  @default(true)
+  quiet_start            String   @default("21:00") @db.VarChar(5)
+  quiet_end              String   @default("08:00") @db.VarChar(5)
+  language_pref          String   @default("en") @db.VarChar(10)
+  created_at             DateTime @default(now())
+  updated_at             DateTime @updatedAt
+  gym                    Gym      @relation(fields: [gym_id], references: [id], onDelete: Cascade)
+
+  @@index([gym_id])
+}
+
+model SystemToken {
+  id             String    @id @default(uuid()) @db.Char(36)
+  token_type     String    @db.VarChar(30)  // 'waba_system_user'
+  access_token   String    @db.Text         // AES-256-GCM encrypted
+  expires_at     DateTime
+  refresh_token  String?   @db.Text         // AES-256-GCM encrypted
+  last_verified  DateTime?
+  status         String    @default("active")  // active|expiring_soon|expired|revoked
+  created_at     DateTime  @default(now())
+  updated_at     DateTime  @updatedAt
 }

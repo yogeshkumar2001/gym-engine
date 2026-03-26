@@ -20,6 +20,8 @@ const CREDENTIAL_FIELDS = [
   'whatsapp_phone_number_id',
   'whatsapp_access_token',
   'google_sheet_id',   // added — existing plaintext values are handled by decrypt()'s backward-compat check
+  'access_token',      // SystemToken
+  'refresh_token',     // SystemToken
 ];
 
 /**
@@ -72,4 +74,7 @@ function decryptGymCredentials(gym) {
   return gym;
 }
 
-module.exports = { encrypt, decrypt, decryptGymCredentials };
+const encryptField = encrypt;
+const decryptField = decrypt;
+
+module.exports = { encrypt, decrypt, encryptField, decryptField, decryptGymCredentials, CREDENTIAL_FIELDS };

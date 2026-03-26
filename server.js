@@ -6,7 +6,17 @@ require('dotenv').config();
 // Fail fast before any module initialisation if critical secrets are absent.
 // verifyAdmin.js also guards ADMIN_API_KEY at module load, but an explicit
 // check here surfaces all missing vars in a single error message.
-const REQUIRED_ENV = ['DATABASE_URL', 'MASTER_ENCRYPTION_KEY', 'JWT_SECRET', 'ADMIN_API_KEY'];
+const REQUIRED_ENV = [
+  'DATABASE_URL',
+  'MASTER_ENCRYPTION_KEY',
+  'JWT_SECRET',
+  'ADMIN_API_KEY',
+  'META_APP_ID',
+  'META_APP_SECRET',
+  'WABA_ID',
+  'META_WEBHOOK_VERIFY_TOKEN',
+  'FOUNDER_WHATSAPP_NUMBER',
+];
 const missingEnv = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missingEnv.length > 0) {
   // eslint-disable-next-line no-console
@@ -19,6 +29,11 @@ if (!process.env.ALLOWED_ORIGIN) {
   console.warn('[startup] ALLOWED_ORIGIN is not set — CORS will block all cross-origin requests.');
 }
 
+if (!process.env.FOUNDER_EMAIL) {
+  // eslint-disable-next-line no-console
+  console.warn('[startup] FOUNDER_EMAIL is not set — email alerts will be skipped.');
+}
+
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
@@ -29,6 +44,7 @@ const logger = require('./src/config/logger');
 const prisma = require('./src/lib/prisma');
 const routes = require('./src/routes');
 const webhookRoutes = require('./src/routes/webhook.routes');
+const whatsappWebhookRoutes = require('./src/routes/whatsapp.routes');
 const publicRoutes = require('./src/routes/public.routes');
 const ownerRoutes = require('./src/routes/owner.routes');
 const adminRoutes = require('./src/routes/admin.routes');
@@ -38,6 +54,9 @@ const { initCredentialHealthCron } = require('./src/cron/credentialHealthCron');
 const { initMemberSyncCron } = require('./src/cron/memberSyncCron');
 const { initReactivationCron } = require('./src/cron/reactivationCron');
 const { initSubscriptionWarnCron } = require('./src/cron/subscriptionWarnCron');
+const queueProcessorCron = require('./src/cron/queueProcessorCron');
+const retryProcessorCron = require('./src/cron/retryProcessorCron');
+const tokenHealthCron = require('./src/cron/tokenHealthCron');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -67,9 +86,10 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // ─── Webhook Routes (MUST be before express.json) ────────────────────────────
-// Razorpay sends raw body — express.raw() is applied per-route inside this router.
-// If express.json() ran first it would consume the stream and break HMAC verification.
+// Both Razorpay and Meta send raw bodies — express.raw() is applied per-route
+// inside each router. express.json() must not run first or it consumes the stream.
 app.use('/webhook', webhookRoutes);
+app.use('/api/internal/whatsapp', whatsappWebhookRoutes);
 
 // ─── Body Parser ─────────────────────────────────────────────────────────────
 app.use(express.json());
@@ -142,6 +162,10 @@ async function start() {
 
     // ─── Cron Jobs ─────────────────────────────────────────────────────────────
     // Collect task handles so shutdown can stop them before draining connections.
+    queueProcessorCron.start(); // every 30s  — send queued WhatsApp messages
+    retryProcessorCron.start(); // every 5min — reset failed messages for retry
+    tokenHealthCron.start();    // every 6h   — verify WABA system token health
+
     const cronTasks = [
       initSubscriptionWarnCron(), // 08:00 IST — warn gyms whose subscription expires within 7 days
       initExpiryCron(),           // 09:00 IST — detect expiring members, create/send renewals
@@ -149,6 +173,9 @@ async function start() {
       initCredentialHealthCron(), // 00:30 IST — validate Razorpay / WhatsApp / Google Sheet creds
       initMemberSyncCron(),       // 02:00 IST — sync members from Google Sheet
       initReactivationCron(),     // 10:00 IST Monday — win-back campaigns for churned members
+      queueProcessorCron,
+      retryProcessorCron,
+      tokenHealthCron,
     ];
 
     const shutdown = async (signal) => {
