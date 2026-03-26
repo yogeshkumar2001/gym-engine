@@ -4,6 +4,13 @@ const cron = require('node-cron');
 const prisma = require('../lib/prisma');
 const logger = require('../config/logger');
 const { getTargetDayWindow, getFortyEightHoursAgo } = require('../utils/dateUtils');
+
+const DEFAULT_RECOVERY_SEQUENCE = [
+  { day: 1, action: 'reminder',     template: 'recovery_day1' },
+  { day: 2, action: 'reminder',     template: 'recovery_day2' },
+  { day: 4, action: 'discount',     template: 'recovery_discount' },
+  { day: 6, action: 'final_notice', template: 'recovery_final' },
+];
 const {
   createRenewalIfNotExists,
   markLinkGenerated,
@@ -234,7 +241,7 @@ async function processMember(gym, member, now) {
  * @param {Date} now
  * @returns {Promise<boolean>} true if a message was sent this run
  */
-async function processRecovery(gym, renewal, member, now) {
+async function processRecovery(gym, renewal, member, now, recoverySequence = DEFAULT_RECOVERY_SEQUENCE) {
   if (!gymHasService(gym, 'whatsapp_reminders')) {
     logger.info('[expiryCron] whatsapp_reminders disabled — skipping recovery message', {
       gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
@@ -243,7 +250,30 @@ async function processRecovery(gym, renewal, member, now) {
   }
 
   const fromStep = renewal.recovery_step;
+  const stepConfig = recoverySequence[fromStep];
+
+  if (!stepConfig) {
+    // Beyond the configured sequence length — mark completed and stop
+    await markRecoveryCompleted(renewal.id);
+    return false;
+  }
+
+  // Timing gate: require (sequence[N].day - sequence[N-1].day) days since last reminder
+  const prevDayValue = fromStep > 0 ? (recoverySequence[fromStep - 1]?.day ?? 0) : 0;
+  const gapDays = stepConfig.day - prevDayValue;
+  if (member.last_reminder_sent_at) {
+    const requiredCutoff = new Date(now.getTime() - gapDays * 24 * 60 * 60 * 1000);
+    if (member.last_reminder_sent_at > requiredCutoff) {
+      logger.debug('[expiryCron] Recovery step too soon — skipping', {
+        gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+        fromStep, required_gap_days: gapDays,
+      });
+      return false;
+    }
+  }
+
   const toStep = fromStep + 1;
+  const isLastStep = fromStep === recoverySequence.length - 1;
 
   // Atomically claim this step — prevents double-processing across concurrent runs
   const advanced = await advanceRecoveryStep(renewal.id, fromStep, toStep);
@@ -254,16 +284,15 @@ async function processRecovery(gym, renewal, member, now) {
     return false;
   }
 
+  // Discount value: prefer WhatsappConfig, fall back to gym field
+  const discountPct = gym.whatsapp_config?.recovery_discount_pct != null
+    ? Number(gym.whatsapp_config.recovery_discount_pct)
+    : (gym.recovery_discount_percent ?? 5);
+
   try {
     let messageId = null;
 
-    if (toStep === 1) {
-      // Follow-up: same link, different message
-      ({ messageId } = await sendRecoveryFollowup(gym, renewal, member));
-
-    } else if (toStep === 2) {
-      // Discount: create new Razorpay link at reduced price (per-gym configurable %)
-      const discountPct = gym.recovery_discount_percent ?? 5;
+    if (stepConfig.action === 'discount') {
       const discountedAmount =
         Math.round(renewal.amount * (1 - discountPct / 100) * 100) / 100;
 
@@ -273,14 +302,11 @@ async function processRecovery(gym, renewal, member, now) {
       await applyDiscountToRenewal(
         renewal.id, paymentLinkId, shortUrl, discountPct, discountedAmount
       );
-      // Send with the NEW short URL
       ({ messageId } = await sendDiscountOffer(
         gym, { ...renewal, razorpay_short_url: shortUrl }, member, discountPct
       ));
 
-    } else if (toStep === 3) {
-      // Final notice — use whatever short URL is currently on the renewal
-      // (may be the discounted link from step 2)
+    } else if (stepConfig.action === 'final_notice') {
       const latestRenewal = await prisma.renewal.findUnique({
         where: { id: renewal.id },
         select: { razorpay_short_url: true },
@@ -289,25 +315,28 @@ async function processRecovery(gym, renewal, member, now) {
         gym, { ...renewal, razorpay_short_url: latestRenewal.razorpay_short_url }, member
       ));
       await markRecoveryCompleted(renewal.id);
+
+    } else {
+      // 'reminder' — follow-up with existing payment link
+      ({ messageId } = await sendRecoveryFollowup(gym, renewal, member));
+      if (isLastStep) await markRecoveryCompleted(renewal.id);
     }
 
-    // Stamp the renewal's last whatsapp fields for tracking
     await prisma.renewal.update({
       where: { id: renewal.id },
       data: { whatsapp_message_id: messageId, whatsapp_sent_at: now, whatsapp_status: 'sent' },
     });
 
     logger.info('[expiryCron] Recovery message sent', {
-      gym_id: gym.id, renewal_id: renewal.id, member_id: member.id, step: toStep,
+      gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+      step: toStep, action: stepConfig.action,
     });
     return true;
 
   } catch (err) {
-    // Step was already advanced — don't revert. Log the send failure and move on.
-    // The recovery sequence continues from the advanced step on the next cron run.
     logger.error('[expiryCron] Recovery message failed — step advanced but send failed', {
-      gym_id: gym.id, renewal_id: renewal.id, member_id: member.id, step: toStep,
-      message: err.message,
+      gym_id: gym.id, renewal_id: renewal.id, member_id: member.id,
+      step: toStep, action: stepConfig.action, message: err.message,
     });
     return false;
   }
@@ -327,18 +356,42 @@ async function processRecovery(gym, renewal, member, now) {
  * @param {Date} fortyEightHoursAgo
  * @param {Date} now
  */
-async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHoursAgo, now) {
+async function processGym(gym, now) {
+  const config = gym.whatsapp_config;
+  const reminderDays = Array.isArray(config?.reminder_days_before)
+    ? config.reminder_days_before
+    : [3];
+  const recoverySequence = Array.isArray(config?.recovery_sequence)
+    ? config.recovery_sequence
+    : DEFAULT_RECOVERY_SEQUENCE;
+
+  // One expiry window per configured reminder day
+  const dayWindows = reminderDays.map((d) => getTargetDayWindow(d));
+  const expiryConditions = dayWindows.map((w) => ({
+    expiry_date: { gte: w.startOfTargetDay, lte: w.endOfTargetDay },
+  }));
+
+  // Initial reminder dedup gate (unchanged: 48h)
+  const fortyEightHoursAgo = getFortyEightHoursAgo();
+
+  // Recovery gate: minimum gap across all sequence steps (days between consecutive entries)
+  const minRecoveryGapDays = Math.min(
+    ...recoverySequence.map((s, i) => s.day - (recoverySequence[i - 1]?.day ?? 0))
+  );
+  const recoveryGateCutoff = new Date(now.getTime() - minRecoveryGapDays * 24 * 60 * 60 * 1000);
+
   const members = await prisma.member.findMany({
     where: {
       gym_id: gym.id,
       status: 'active',
-      expiry_date: {
-        gte: startOfTargetDay,
-        lte: endOfTargetDay,
-      },
-      OR: [
-        { last_reminder_sent_at: null },
-        { last_reminder_sent_at: { lte: fortyEightHoursAgo } },
+      AND: [
+        { OR: expiryConditions },
+        {
+          OR: [
+            { last_reminder_sent_at: null },
+            { last_reminder_sent_at: { lte: fortyEightHoursAgo } },
+          ],
+        },
       ],
     },
     select: {
@@ -385,18 +438,22 @@ async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHours
       gym_id: gym.id,
       status: 'link_generated',
       recovery_completed: false,
-      recovery_step: { lt: 3 },
+      recovery_step: { lt: recoverySequence.length },
       whatsapp_status: 'sent',
       member: {
         OR: [
           { last_reminder_sent_at: null },
-          { last_reminder_sent_at: { lte: fortyEightHoursAgo } },
+          { last_reminder_sent_at: { lte: recoveryGateCutoff } },
         ],
       },
     },
     include: {
       member: {
-        select: { id: true, name: true, phone: true, expiry_date: true, plan_amount: true },
+        select: {
+          id: true, name: true, phone: true,
+          expiry_date: true, plan_amount: true,
+          last_reminder_sent_at: true,
+        },
       },
     },
   });
@@ -404,7 +461,7 @@ async function processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHours
   for (const renewal of recoveryRenewals) {
     const { member: recoveryMember } = renewal;
     try {
-      const notified = await processRecovery(gym, renewal, recoveryMember, now);
+      const notified = await processRecovery(gym, renewal, recoveryMember, now, recoverySequence);
       if (notified) {
         remindersSent++;
         if (!notifiedMemberIds.includes(recoveryMember.id)) {
@@ -477,14 +534,7 @@ async function detectExpiringMembers() {
       logger.error('[expiryCron] Failed to clean up stuck renewals.', { message: err.message });
     }
 
-    const { startOfTargetDay, endOfTargetDay } = getTargetDayWindow(3);
-    const fortyEightHoursAgo = getFortyEightHoursAgo();
-
-    logger.debug('[expiryCron] Detection window', {
-      startOfTargetDay: startOfTargetDay.toISOString(),
-      endOfTargetDay: endOfTargetDay.toISOString(),
-      fortyEightHoursAgo: fortyEightHoursAgo.toISOString(),
-    });
+    logger.debug('[expiryCron] Run started — windows computed per-gym from whatsapp_config');
 
     let gyms;
     try {
@@ -508,6 +558,7 @@ async function detectExpiringMembers() {
           services: true,
           recovery_discount_percent: true,
           upi_id: true,
+          whatsapp_config: true,
         },
       });
       gyms = gyms.map(g => decryptGymCredentials(g));
@@ -528,7 +579,7 @@ async function detectExpiringMembers() {
 
     for (const gym of gyms) {
       try {
-        await processGym(gym, startOfTargetDay, endOfTargetDay, fortyEightHoursAgo, now);
+        await processGym(gym, now);
       } catch (err) {
         logger.error(`[expiryCron] Error processing gym_id=${gym.id} "${gym.name}". Skipping.`, {
           message: err.message,

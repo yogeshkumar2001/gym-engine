@@ -14,6 +14,7 @@ const invoiceController = require('../controllers/invoice.controller');
 const manualPaymentController = require('../controllers/manualPayment.controller');
 const discountController       = require('../controllers/discount.controller');
 const attendanceController     = require('../controllers/attendance.controller');
+const whatsappConfigController = require('../controllers/whatsappConfig.controller');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -32,6 +33,14 @@ router.get('/settings/discounts',  discountController.getDiscounts);
 router.patch('/settings/discounts', discountController.updateDiscounts);
 router.get('/settings/upi',  ownerController.getUpiSettings);
 router.patch('/settings/upi', ownerController.updateUpiSettings);
+router.get('/settings/whatsapp',        whatsappConfigController.getWhatsappConfig);
+router.patch('/settings/whatsapp',      whatsappConfigController.updateWhatsappConfig);
+router.get('/settings/recovery',        whatsappConfigController.getRecoveryConfig);
+router.patch('/settings/recovery',      whatsappConfigController.updateRecoveryConfig);
+router.get('/settings/winback',         whatsappConfigController.getWinbackConfig);
+router.patch('/settings/winback',       whatsappConfigController.updateWinbackConfig);
+router.get('/settings/notifications',   whatsappConfigController.getNotificationConfig);
+router.patch('/settings/notifications', whatsappConfigController.updateNotificationConfig);
 
 // Members — specific routes MUST come before /:memberId param route
 router.get('/members/summary',  memberController.getMemberSummary);

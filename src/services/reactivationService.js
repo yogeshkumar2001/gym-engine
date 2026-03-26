@@ -21,9 +21,9 @@ const OFFER_VALIDITY_DAYS = 7;
  * @param {number} gymId
  * @returns {Promise<Array>}
  */
-async function detectChurnedMembers(gymId) {
+async function detectChurnedMembers(gymId, { delayDays = CHURN_MIN_DAYS } = {}) {
   const now = new Date();
-  const churnMinDate = new Date(now - CHURN_MIN_DAYS * 24 * 60 * 60 * 1000);
+  const churnMinDate = new Date(now - delayDays * 24 * 60 * 60 * 1000);
   const churnMaxDate = new Date(now - CHURN_MAX_DAYS * 24 * 60 * 60 * 1000);
   const cooldownDate = new Date(now - REACTIVATION_COOLDOWN_DAYS * 24 * 60 * 60 * 1000);
 
@@ -32,7 +32,7 @@ async function detectChurnedMembers(gymId) {
       gym_id: gymId,
       status: 'active',
       expiry_date: {
-        lt: churnMinDate,   // expired at least 30 days ago
+        lt: churnMinDate,   // expired at least delayDays days ago
         gt: churnMaxDate,   // not more than 180 days ago
       },
       // Not already contacted recently

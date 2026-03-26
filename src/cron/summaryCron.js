@@ -9,6 +9,22 @@ const { decryptGymCredentials } = require('../utils/encryption');
 const { gymHasService } = require('../utils/gymServices');
 
 /**
+ * Returns true if the gym's preferred summary_send_time falls within
+ * ±30 minutes of the current IST time.
+ * Phase 4 will replace this with proper per-gym scheduling.
+ * @param {string} summary_send_time  "HH:MM"
+ * @param {Date}   now
+ */
+function isWithinSendWindow(summary_send_time, now) {
+  // Convert now to IST (UTC+5:30)
+  const istNow = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+  const currentMins = istNow.getUTCHours() * 60 + istNow.getUTCMinutes();
+  const [h, m] = summary_send_time.split(':').map(Number);
+  const configMins = h * 60 + m;
+  return Math.abs(currentMins - configMins) <= 30;
+}
+
+/**
  * Computes today's stats for one gym and sends a WhatsApp daily summary
  * to the gym owner.
  *
@@ -103,6 +119,12 @@ async function sendDailySummaries() {
         whatsapp_access_token: true,
         owner_phone: true,
         services: true,
+        whatsapp_config: {
+          select: {
+            summary_send_time: true,
+            daily_summary_enabled: true,
+          },
+        },
       },
     });
     gyms = gyms.map(g => decryptGymCredentials(g));
@@ -126,6 +148,20 @@ async function sendDailySummaries() {
       logger.info(`[summaryCron] gym_id=${gym.id} "${gym.name}": whatsapp_summary disabled — skipping.`);
       continue;
     }
+
+    const config = gym.whatsapp_config;
+
+    if (config && !config.daily_summary_enabled) {
+      logger.info(`[summaryCron] gym_id=${gym.id} "${gym.name}": daily_summary_enabled=false — skipping.`);
+      continue;
+    }
+
+    const sendTime = config?.summary_send_time ?? '20:00';
+    if (!isWithinSendWindow(sendTime, now)) {
+      logger.debug(`[summaryCron] gym_id=${gym.id} "${gym.name}": preferred send time ${sendTime} not within window — skipping.`);
+      continue;
+    }
+
     try {
       await processGymSummary(gym, startOfToday, endOfToday);
     } catch (err) {

@@ -6,9 +6,10 @@ const logger = require('../config/logger');
 const { decryptGymCredentials } = require('../utils/encryption');
 const {
   validateRazorpay,
-  validateWhatsapp,
   validateGoogleSheet,
 } = require('../services/credentialValidator');
+// WhatsApp token validation removed — centralized system token is now
+// monitored by tokenHealthCron (every 6h via TokenManager.healthCheck).
 
 // ─── Run-time state ───────────────────────────────────────────────────────────
 // Tracks when this cron last began a run.  Module-level, so it survives across
@@ -53,28 +54,22 @@ function getLastHealthCronRunAt() {
  * @returns {Promise<boolean>}  true when all credentials are valid
  */
 async function checkGymCredentials(gym, now) {
-  // Run all three validations concurrently — independent of each other.
-  const [rzpSettled, waSettled, sheetSettled] = await Promise.allSettled([
+  // Razorpay and Google Sheet remain per-gym.
+  // WhatsApp is now a centralized system token — validated by tokenHealthCron.
+  const [rzpSettled, sheetSettled] = await Promise.allSettled([
     validateRazorpay(gym),
-    validateWhatsapp(gym),
     validateGoogleSheet(gym),
   ]);
 
-  // Each validator catches internally, so status should always be 'fulfilled'.
-  // The fallback handles any unexpected thrown value defensively.
   const rzp   = rzpSettled.status   === 'fulfilled'
     ? rzpSettled.value
     : { valid: false, error: rzpSettled.reason?.message ?? 'Unexpected error.' };
-
-  const wa    = waSettled.status    === 'fulfilled'
-    ? waSettled.value
-    : { valid: false, error: waSettled.reason?.message ?? 'Unexpected error.' };
 
   const sheet = sheetSettled.status === 'fulfilled'
     ? sheetSettled.value
     : { valid: false, error: sheetSettled.reason?.message ?? 'Unexpected error.' };
 
-  const allValid = rzp.valid && wa.valid && sheet.valid;
+  const allValid = rzp.valid && sheet.valid;
 
   if (allValid) {
     const wasInError = gym.status === 'error';
@@ -82,38 +77,29 @@ async function checkGymCredentials(gym, now) {
     await prisma.gym.update({
       where: { id: gym.id },
       data: {
-        // Restore to active if this gym was previously errored by the health cron.
-        // 'suspended' gyms are intentionally excluded from this cron's query, so
-        // the only non-active status we can see here is 'error'.
         ...(wasInError && { status: 'active', last_error_at: null }),
         last_health_check_at: now,
         last_error_message:   null,
         razorpay_valid:       true,
-        whatsapp_valid:       true,
         sheet_valid:          true,
       },
     });
 
     if (wasInError) {
       logger.warn('[credentialHealthCron] Credentials recovered — gym restored to active', {
-        gym_id:   gym.id,
-        gym_name: gym.name,
+        gym_id: gym.id, gym_name: gym.name,
       });
     } else {
       logger.info('[credentialHealthCron] Credentials valid', {
-        gym_id:   gym.id,
-        gym_name: gym.name,
+        gym_id: gym.id, gym_name: gym.name,
       });
     }
 
     return true;
   }
 
-  // Build a compact human-readable error summary.
-  // Never include credential values — only upstream error descriptions.
   const failures = [];
   if (!rzp.valid)   failures.push(`[razorpay] ${rzp.error}`);
-  if (!wa.valid)    failures.push(`[whatsapp] ${wa.error}`);
   if (!sheet.valid) failures.push(`[sheet] ${sheet.error}`);
 
   await prisma.gym.update({
@@ -123,7 +109,6 @@ async function checkGymCredentials(gym, now) {
       last_error_message: failures.join('; '),
       last_error_at:      now,
       razorpay_valid:     rzp.valid,
-      whatsapp_valid:     wa.valid,
       sheet_valid:        sheet.valid,
     },
   });
@@ -132,10 +117,8 @@ async function checkGymCredentials(gym, now) {
     gym_id:         gym.id,
     gym_name:       gym.name,
     razorpay:       rzp.valid   ? 'ok' : 'FAIL',
-    whatsapp:       wa.valid    ? 'ok' : 'FAIL',
     sheet:          sheet.valid ? 'ok' : 'FAIL',
     razorpay_error: rzp.error   ?? null,
-    whatsapp_error: wa.error    ?? null,
     sheet_error:    sheet.error ?? null,
   });
 
@@ -173,11 +156,9 @@ async function runCredentialHealthCheck() {
         id:                       true,
         name:                     true,
         status:                   true,   // needed to detect recovery path
-        razorpay_key_id:          true,
-        razorpay_key_secret:      true,
-        whatsapp_phone_number_id: true,
-        whatsapp_access_token:    true,
-        google_sheet_id:          true,
+        razorpay_key_id:     true,
+        razorpay_key_secret: true,
+        google_sheet_id:     true,
       },
     });
     gyms = gyms.map(g => decryptGymCredentials(g));

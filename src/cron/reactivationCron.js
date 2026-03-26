@@ -20,7 +20,21 @@ const { sendReactivationOffer } = require('../services/whatsappService');
  * @param {object} gym  — decrypted credentials included
  */
 async function processGymReactivation(gym) {
-  const members = await detectChurnedMembers(gym.id);
+  const config = gym.whatsapp_config;
+
+  // Skip if winback is disabled in config
+  if (config && !config.winback_enabled) {
+    logger.info(`[reactivationCron] gym ${gym.id}: winback_enabled=false — skipping.`);
+    return;
+  }
+
+  const winbackDelayDays = config?.winback_delay_days ?? 30;
+  const discountPct = config?.winback_discount_pct != null
+    ? Number(config.winback_discount_pct)
+    : (gym.reactivation_discount_percent ?? 10);
+  const maxAttempts = config?.winback_max_attempts ?? 2;
+
+  const members = await detectChurnedMembers(gym.id, { delayDays: winbackDelayDays });
 
   if (members.length === 0) {
     logger.debug(`[reactivationCron] No churned members for gym ${gym.id}`);
@@ -30,11 +44,22 @@ async function processGymReactivation(gym) {
   logger.info(`[reactivationCron] gym ${gym.id} — ${members.length} churned member(s) found`);
 
   let sent = 0;
+  let skipped = 0;
   let failed = 0;
 
   for (const member of members) {
     try {
-      const discountPct = gym.reactivation_discount_percent ?? 10;
+      // Enforce winback_max_attempts
+      const campaignCount = await prisma.reactivationCampaign.count({
+        where: { gym_id: gym.id, member_id: member.id },
+      });
+
+      if (campaignCount >= maxAttempts) {
+        logger.debug(`[reactivationCron] Max attempts (${maxAttempts}) reached for member ${member.id} — skipping.`);
+        skipped++;
+        continue;
+      }
+
       await sendReactivationOffer(gym, member, discountPct);
       await recordReactivationCampaign(gym.id, member.id, discountPct);
       sent++;
@@ -45,7 +70,7 @@ async function processGymReactivation(gym) {
     }
   }
 
-  logger.info(`[reactivationCron] gym ${gym.id} done — sent: ${sent}, failed: ${failed}`);
+  logger.info(`[reactivationCron] gym ${gym.id} done — sent: ${sent}, skipped: ${skipped}, failed: ${failed}`);
 }
 
 /**
@@ -73,6 +98,7 @@ async function runReactivationJob() {
       whatsapp_access_token: true,
       owner_phone: true,
       reactivation_discount_percent: true,
+      whatsapp_config: true,
     },
   });
 
