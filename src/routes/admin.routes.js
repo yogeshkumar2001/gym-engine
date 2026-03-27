@@ -42,4 +42,10 @@ router.post('/gym/:gymId/owners', adminController.linkOwnerToGym);
 router.get('/gym/:gymId/cohorts',   analyticsController.cohortReport);
 router.get('/gym/:gymId/retention', analyticsController.retentionCurve);
 
+// WhatsApp system health
+router.get('/health/whatsapp', adminController.getWhatsappHealth);
+
+// Manually activate a gym's WhatsApp (bypass auto-detection)
+router.post('/gym/:gymId/activate-whatsapp', adminController.activateGymWhatsapp);
+
 module.exports = router;

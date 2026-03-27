@@ -107,10 +107,7 @@ async function handleIncomingMessage(value) {
     if (body === 'PAID') {
       await handlePaidReply(gym_id, senderPhone);
     } else if (body === 'STOP') {
-      logger.info('[WebhookHandler] STOP received — opt-out logged (Phase 3 will persist)', {
-        gym_id,
-        phone: senderPhone,
-      });
+      await handleStopReply(gym_id, senderPhone);
     } else {
       // Forward to gym owner
       const gym = await prisma.gym.findUnique({
@@ -129,6 +126,25 @@ async function handleIncomingMessage(value) {
         );
       }
     }
+  }
+}
+
+/**
+ * Sets whatsapp_opt_out=true for a member who replied STOP.
+ * Future enqueue() calls for this member will be silently skipped.
+ * @param {number} gymId
+ * @param {string} senderPhone
+ */
+async function handleStopReply(gymId, senderPhone) {
+  const updated = await prisma.member.updateMany({
+    where: { gym_id: gymId, phone: senderPhone },
+    data: { whatsapp_opt_out: true },
+  });
+
+  if (updated.count === 0) {
+    logger.warn('[WebhookHandler] STOP from unknown member', { gym_id: gymId, phone: senderPhone });
+  } else {
+    logger.info('[WebhookHandler] member opted out via STOP', { gym_id: gymId, phone: senderPhone });
   }
 }
 

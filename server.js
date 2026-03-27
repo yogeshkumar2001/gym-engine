@@ -45,6 +45,7 @@ const prisma = require('./src/lib/prisma');
 const routes = require('./src/routes');
 const webhookRoutes = require('./src/routes/webhook.routes');
 const whatsappWebhookRoutes = require('./src/routes/whatsapp.routes');
+const onboardingWhatsappRoutes = require('./src/routes/onboarding.whatsapp.routes');
 const publicRoutes = require('./src/routes/public.routes');
 const ownerRoutes = require('./src/routes/owner.routes');
 const adminRoutes = require('./src/routes/admin.routes');
@@ -54,6 +55,11 @@ const { initCredentialHealthCron } = require('./src/cron/credentialHealthCron');
 const { initMemberSyncCron } = require('./src/cron/memberSyncCron');
 const { initReactivationCron } = require('./src/cron/reactivationCron');
 const { initSubscriptionWarnCron } = require('./src/cron/subscriptionWarnCron');
+const { initFallbackDigestCron } = require('./src/cron/fallbackDigestCron');
+const { initOnboardingCheckCron } = require('./src/cron/onboardingCheckCron');
+const { initDeadLetterCron }     = require('./src/cron/deadLetterCron');
+const { initQualityMonitorCron } = require('./src/cron/qualityMonitorCron');
+const { initTemplateSyncCron }   = require('./src/cron/templateSyncCron');
 const queueProcessorCron = require('./src/cron/queueProcessorCron');
 const retryProcessorCron = require('./src/cron/retryProcessorCron');
 const tokenHealthCron = require('./src/cron/tokenHealthCron');
@@ -106,6 +112,7 @@ app.use('/', routes);
 app.use('/public', publicRoutes);
 app.use('/owner', ownerRoutes);
 app.use('/admin', adminRoutes);
+app.use('/onboarding/whatsapp', onboardingWhatsappRoutes);
 
 // ─── 404 Handler ─────────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -169,6 +176,11 @@ async function start() {
     const cronTasks = [
       initSubscriptionWarnCron(), // 08:00 IST — warn gyms whose subscription expires within 7 days
       initExpiryCron(),           // 09:00 IST — detect expiring members, create/send renewals
+      initFallbackDigestCron(),   // 09:00 IST — send copy-paste digest to gyms still in fallback mode
+      initOnboardingCheckCron(),  // every 2h  — promote verifying accounts to active once Meta approves
+      initDeadLetterCron(),       // 06:00 IST — alert founder on dead messages from last 24h
+      initQualityMonitorCron(),   // 09:00 IST — poll Meta for quality ratings, alert on RED
+      initTemplateSyncCron(),     // 03:00 IST — sync templates from Meta, alert on rejected/paused
       initSummaryCron(),          // 20:00 IST — daily stats WhatsApp to gym owner
       initCredentialHealthCron(), // 00:30 IST — validate Razorpay / WhatsApp / Google Sheet creds
       initMemberSyncCron(),       // 02:00 IST — sync members from Google Sheet

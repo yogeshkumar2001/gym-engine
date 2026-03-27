@@ -17,35 +17,48 @@ function parseTime(hhmm) {
   return { hours: h, minutes: m };
 }
 
+// IST = UTC+5:30. Quiet-hour config is stored as IST wall-clock times.
+// All Date objects in JS are UTC internally, so we must convert explicitly
+// instead of relying on date.getHours() which uses the server's local tz.
+const IST_OFFSET_MINS = 5 * 60 + 30;
+
 /**
- * Returns true if the given Date falls within a quiet window.
- * Handles cross-midnight ranges (e.g. 21:00–08:00).
+ * Returns total minutes since midnight IST for a given UTC Date.
+ */
+function getISTMins(date) {
+  return (date.getUTCHours() * 60 + date.getUTCMinutes() + IST_OFFSET_MINS) % (24 * 60);
+}
+
+/**
+ * Returns true if the given Date (UTC) falls within a quiet window
+ * expressed in IST wall-clock time. Handles cross-midnight ranges.
  */
 function isQuietHour(date, quiet_start, quiet_end) {
-  const totalMins = date.getHours() * 60 + date.getMinutes();
+  const totalMins = getISTMins(date);
   const { hours: sh, minutes: sm } = parseTime(quiet_start);
   const { hours: eh, minutes: em } = parseTime(quiet_end);
   const startMins = sh * 60 + sm;
-  const endMins = eh * 60 + em;
+  const endMins   = eh * 60 + em;
 
   if (startMins > endMins) {
-    // Cross-midnight: e.g. 21:00–08:00
+    // Cross-midnight: e.g. 21:00–08:00 IST
     return totalMins >= startMins || totalMins < endMins;
   }
   return totalMins >= startMins && totalMins < endMins;
 }
 
 /**
- * Advances a Date to quiet_end on the same or next day.
+ * Advances a UTC Date forward to the next occurrence of quiet_end (IST).
  */
 function advanceToQuietEnd(date, quiet_end) {
   const { hours, minutes } = parseTime(quiet_end);
-  const advanced = new Date(date);
-  advanced.setHours(hours, minutes, 0, 0);
-  if (advanced <= date) {
-    advanced.setDate(advanced.getDate() + 1);
-  }
-  return advanced;
+  const targetISTMins = hours * 60 + minutes;
+  const currentISTMins = getISTMins(date);
+
+  let diffMins = targetISTMins - currentISTMins;
+  if (diffMins <= 0) diffMins += 24 * 60; // wrap to next day
+
+  return new Date(date.getTime() + diffMins * 60 * 1000);
 }
 
 /**
@@ -60,6 +73,23 @@ function advanceToQuietEnd(date, quiet_end) {
  * @returns {Promise<{ queued: boolean, id?: string, skipped?: boolean }>}
  */
 async function enqueue(gymId, memberId, templateType, params, recipientPhone, options = {}) {
+  // Opt-out check: never enqueue for members who replied STOP
+  if (memberId != null) {
+    const member = await prisma.member.findUnique({
+      where: { id: memberId },
+      select: { whatsapp_opt_out: true },
+    });
+
+    if (member?.whatsapp_opt_out) {
+      logger.debug('[QueueProcessor] enqueue skipped — member opted out', {
+        gym_id: gymId,
+        member_id: memberId,
+        template_type: templateType,
+      });
+      return { queued: false, skipped: true };
+    }
+  }
+
   // Dedup: skip if same message sent/queued in last 24h
   if (memberId != null) {
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -259,7 +289,6 @@ async function retryFailed() {
     where: {
       status: 'failed',
       next_retry_at: { lte: new Date() },
-      attempts: { lt: prisma.messageQueue.fields?.max_attempts ?? 3 },
     },
     select: { id: true, attempts: true, max_attempts: true },
   });

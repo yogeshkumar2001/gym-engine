@@ -83,6 +83,7 @@ model Member {
   deleted_at                  DateTime?
   reactivation_sent_at        DateTime?
   reactivation_offer_percent  Float?
+  whatsapp_opt_out            Boolean   @default(false)
   photo_url                   String?
   id_proof_type               String?
   id_proof_number             String?

@@ -15,6 +15,8 @@ const manualPaymentController = require('../controllers/manualPayment.controller
 const discountController       = require('../controllers/discount.controller');
 const attendanceController     = require('../controllers/attendance.controller');
 const whatsappConfigController = require('../controllers/whatsappConfig.controller');
+const fallbackController       = require('../controllers/fallback.controller');
+const messageStatsController   = require('../controllers/messageStats.controller');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
@@ -84,6 +86,14 @@ router.get('/analytics/retention', analyticsController.retentionCurve);
 // Attendance — /stats must come before any param route
 router.get('/attendance/stats',  attendanceController.getAttendanceStats);
 router.get('/attendance',        attendanceController.listAttendance);
+
+// Fallback digest (for gyms in fallback mode — manual copy-paste sending)
+router.get('/fallback/today',      fallbackController.getFallbackToday);
+router.post('/fallback/mark-sent', fallbackController.markFallbackSentHandler);
+
+// Message delivery stats + recovery timeline
+router.get('/messages/stats',                    messageStatsController.getMessageStats);
+router.get('/messages/recovery/:memberId',       messageStatsController.getMemberRecoveryTimeline);
 
 // Lead Funnel
 router.post('/leads',                   leadController.createLead);

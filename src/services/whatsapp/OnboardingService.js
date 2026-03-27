@@ -115,23 +115,24 @@ async function verifyOTP(gymId, otpCode) {
 async function checkRegistrationStatus(gymId) {
   const account = await prisma.whatsappAccount.findUnique({
     where: { gym_id: gymId },
-    select: { status: true, fallback_mode: true, phone_number_id: true },
+    select: { status: true, fallback_mode: true, phone_number_id: true, quality_rating: true },
   });
 
   if (!account) {
-    return { status: 'not_setup', fallback_mode: true, phone_number_id: null };
+    return { status: 'not_setup', fallback_mode: true, phone_number_id: null, quality_rating: null };
   }
 
   // Auto-switchover: if fully active but still in fallback mode, promote
   if (account.status === 'active' && account.fallback_mode) {
     await activateGym(gymId);
-    return { status: 'active', fallback_mode: false, phone_number_id: account.phone_number_id };
+    return { status: 'active', fallback_mode: false, phone_number_id: account.phone_number_id, quality_rating: account.quality_rating };
   }
 
   return {
     status: account.status,
     fallback_mode: account.fallback_mode,
     phone_number_id: account.phone_number_id,
+    quality_rating: account.quality_rating,
   };
 }
 
@@ -156,7 +157,7 @@ async function activateGym(gymId) {
   // Create default config if not yet present
   const gym = await prisma.gym.findUnique({
     where: { id: gymId },
-    select: { owner_phone: true, upi_id: true, recovery_discount_percent: true, reactivation_discount_percent: true },
+    select: { name: true, owner_phone: true, upi_id: true, recovery_discount_percent: true, reactivation_discount_percent: true },
   });
 
   const existingConfig = await prisma.whatsappConfig.findUnique({ where: { gym_id: gymId } });
@@ -178,7 +179,7 @@ async function activateGym(gymId) {
       gymId,
       null,
       'onboarding_complete',
-      ['your gym'],
+      [gym.name],
       gym.owner_phone,
       { trigger_type: 'manual' }
     );
